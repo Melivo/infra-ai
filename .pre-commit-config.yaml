@@ -1,0 +1,24 @@
+repos:
+  - repo: local
+    hooks:
+      - id: shellcheck
+        name: shellcheck
+        entry: shellcheck
+        language: system
+        files: \.sh$
+      - id: bash-syntax
+        name: bash syntax check
+        entry: bash -n
+        language: system
+        files: \.sh$
+      - id: python-compile
+        name: python compile check
+        entry: bash scripts/check_python.sh
+        language: system
+        files: \.py$
+      - id: docker-compose-config
+        name: docker compose config
+        entry: bash scripts/check_docker_compose.sh
+        language: system
+        pass_filenames: false
+        files: ^vllm/(docker-compose\.yml|\.env|start\.sh)$

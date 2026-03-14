@@ -1,0 +1,35 @@
+services:
+  vllm-qwen:
+    image: vllm/vllm-openai:latest
+    container_name: vllm-qwen
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    gpus: all
+    environment:
+      HUGGING_FACE_HUB_TOKEN: "${HUGGING_FACE_HUB_TOKEN:-}"
+      HF_HOME: /root/.cache/huggingface
+      TRANSFORMERS_CACHE: /root/.cache/huggingface
+      VLLM_ALLOW_LONG_MAX_MODEL_LEN: "1"
+    volumes:
+      - ${AI_MODELS_DIR}:/root/.cache/huggingface
+      - ${AI_CACHE_DIR}:/root/.cache/vllm
+      - ${AI_LOGS_DIR}:/var/log/vllm
+    shm_size: "2gb"
+    ipc: host
+    command:
+      - --model
+      - Qwen/Qwen3-32B
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --dtype
+      - auto
+      - --gpu-memory-utilization
+      - "0.92"
+      - --max-model-len
+      - "8192"
+      - --trust-remote-code
