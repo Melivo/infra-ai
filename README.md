@@ -118,6 +118,19 @@ Aktuell exponiert er:
 
 `GET /v1/models` ist aktuell ein kleiner Kompatibilitaetspfad fuer lokale Modell-Discovery ueber den Router und wird derzeit an `local_vllm` gebunden. Der Endpunkt ist damit noch kein aggregiertes Multi-Provider-Discovery-API des gesamten Routers.
 
+## Current Platform Guarantees
+
+Der aktuelle Router-Vertrag ist bewusst klein, aber hart:
+
+- Der Router ist frontend-agnostisch und die einzige Stelle mit Modell-, Provider- und Routing-Logik.
+- Oeffentliche Endpunkte sind aktuell `GET /healthz`, `GET /v1/router/capabilities`, `GET /v1/models` und `POST /v1/chat/completions`.
+- `POST /v1/chat/completions` wird frueh und strikt validiert, bevor Providerlogik ausgefuehrt wird.
+- Fehler werden fuer Frontends konsistent als `{"error":{"type":"...","message":"..."}}` ausgegeben.
+- Provideraufrufe unterliegen einem routergesteuerten Timeout ueber `INFRA_AI_REQUEST_TIMEOUT_S`.
+- Streaming ist aktuell nur fuer den lokalen Pfad ueber den Router vorgesehen.
+- `GET /v1/models` bleibt vorerst ein lokaler Kompatibilitaetspfad und ist noch kein aggregiertes Multi-Provider-Discovery-API.
+- Bewusst noch nicht enthalten sind Tool-Use, Agents, MCP, RAG und intelligente Autowahl zwischen Providern.
+
 ## Router-Introspection
 
 `GET /v1/router/capabilities` ist ein read-only Introspection-Endpunkt fuer CLI und spaetere Frontends.
@@ -189,6 +202,31 @@ Der Router validiert `POST /v1/chat/completions` bewusst frueh und strikt:
 
 Semantisch kaputte oder mehrdeutige Requests werden mit konsistenten `4xx`-Antworten im Format
 `{"error":{"type":"...","message":"..."}}` abgelehnt, statt still normalisiert oder implizit umgedeutet zu werden.
+
+## Error- und Timeout-Contract
+
+Providerbedingte Fehler werden an der Router-Grenze normalisiert. Frontends sehen dadurch keine rohen Upstream-Fehlerstrukturen, sondern stabile Typen wie zum Beispiel:
+
+- `provider_error`
+- `provider_unavailable`
+- `upstream_bad_response`
+- `auth_error`
+- `rate_limited`
+- `timeout`
+- `streaming_not_supported`
+
+Timeouts fuer Upstream-Provider werden vom Router ueber `INFRA_AI_REQUEST_TIMEOUT_S` kontrolliert und als konsistenter `504`-Fehler mit `error.type=timeout` sichtbar.
+
+## Betriebslogs
+
+Der Router schreibt minimale strukturierte JSON-Logs fuer:
+
+- Router-Start
+- eingehende validierte Chat-Requests
+- gewaehlte Route und Provider
+- Provider-Fehler und Timeout-Faelle
+
+Die Logs enthalten bewusst keine Prompt-Inhalte, keine API-Keys und keine sonstigen Secrets.
 
 ## Minimale CLI
 

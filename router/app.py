@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from collections.abc import Callable, Iterator
 from http import HTTPStatus
@@ -33,6 +34,8 @@ CAPABILITIES_SCHEMA_VERSION = "1"
 ROUTER_VERSION = "0.1.0"
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant"}
 MODEL_AUTO_ALIASES = {"auto", "default", "router-default"}
+LOGGER = logging.getLogger("infra_ai.router")
+LOGGER.addHandler(logging.NullHandler())
 
 
 class ConfigValidationError(RuntimeError):
@@ -174,6 +177,7 @@ class RouterApplication:
         except RoutingPolicyError as exc:
             return exc.status_code, exc.payload
 
+        _log_route_selection(selection, streaming=False)
         payload_with_slot = _with_provider_slot(payload, selection.provider_slot)
         return self._run_provider_action(
             selection.provider_name,
@@ -188,7 +192,16 @@ class RouterApplication:
         )
         provider = self.providers[selection.provider_name]
         payload_with_slot = _with_provider_slot(payload, selection.provider_slot)
-        upstream = provider.stream_chat_completions(payload_with_slot)
+        _log_route_selection(selection, streaming=True)
+        try:
+            upstream = provider.stream_chat_completions(payload_with_slot)
+        except ProviderError as exc:
+            _log_provider_error(
+                provider_name=selection.provider_name,
+                error=exc,
+                streaming=True,
+            )
+            raise
         content_type = upstream.headers.get_content_type() or "text/event-stream"
         return StreamingResponse(
             status_code=upstream.getcode(),
@@ -205,6 +218,7 @@ class RouterApplication:
         try:
             return action(provider)
         except ProviderError as exc:
+            _log_provider_error(provider_name=provider_name, error=exc, streaming=False)
             return exc.status_code, normalize_provider_error(exc)
 
 
@@ -258,6 +272,7 @@ class RouterRequestHandler(BaseHTTPRequestHandler):
             self._write_response(exc.status_code, exc.payload)
             return
 
+        _log_chat_request(payload)
         if payload.get("stream") is True:
             self._write_stream_response(payload)
             return
@@ -337,6 +352,92 @@ def _with_provider_slot(
     payload_with_slot = dict(payload)
     payload_with_slot["provider_slot"] = provider_slot
     return payload_with_slot
+
+
+def _configure_logging() -> None:
+    if logging.getLogger().handlers:
+        return
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+
+def _build_log_event(event: str, **fields: object) -> str:
+    payload: dict[str, object] = {
+        "component": "router",
+        "event": event,
+    }
+    for key, value in fields.items():
+        if value is not None:
+            payload[key] = value
+    return json.dumps(payload, sort_keys=True)
+
+
+def _log_info(event: str, **fields: object) -> None:
+    LOGGER.info(_build_log_event(event, **fields))
+
+
+def _log_warning(event: str, **fields: object) -> None:
+    LOGGER.warning(_build_log_event(event, **fields))
+
+
+def _log_chat_request(payload: dict[str, JSONValue]) -> None:
+    route = payload.get("route")
+    model = payload.get("model")
+    messages = payload.get("messages")
+    _log_info(
+        "chat_request_received",
+        route_requested=route if isinstance(route, str) else "auto",
+        streaming=payload.get("stream") is True,
+        messages_count=len(messages) if isinstance(messages, list) else None,
+        model_mode=_describe_model_mode(model),
+    )
+
+
+def _log_route_selection(selection, *, streaming: bool) -> None:
+    _log_info(
+        "route_selected",
+        routing_mode=selection.routing_mode,
+        provider=selection.provider_name,
+        provider_slot=selection.provider_slot,
+        streaming=streaming,
+    )
+
+
+def _log_provider_error(
+    *,
+    provider_name: str,
+    error: ProviderError,
+    streaming: bool,
+) -> None:
+    normalized_error = normalize_provider_error(error)
+    error_type = _extract_error_type(normalized_error)
+    log_event = "provider_timeout" if error_type == "timeout" else "provider_error"
+    _log_warning(
+        log_event,
+        provider=provider_name,
+        streaming=streaming,
+        status_code=error.status_code,
+        error_type=error_type,
+    )
+
+
+def _describe_model_mode(model: JSONValue) -> str:
+    if not isinstance(model, str):
+        return "omitted"
+    normalized_model = model.strip().lower()
+    if normalized_model in MODEL_AUTO_ALIASES:
+        return "auto"
+    return "explicit"
+
+
+def _extract_error_type(payload: JSONValue) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    error_payload = payload.get("error")
+    if isinstance(error_payload, dict):
+        error_type = error_payload.get("type")
+        if isinstance(error_type, str):
+            return error_type
+    return None
 
 
 def validate_chat_request_payload(payload: dict[str, JSONValue]) -> None:
@@ -746,16 +847,20 @@ def _error_payload(error_type: str, message: str) -> JSONValue:
 
 
 def main() -> None:
+    _configure_logging()
     config = load_config()
     try:
         app = RouterApplication(config)
     except ConfigValidationError as exc:
         raise SystemExit(str(exc)) from exc
     server = RouterHTTPServer((config.host, config.port), RouterRequestHandler, app)
-    print(
-        "infra-ai router listening on "
-        f"http://{config.host}:{config.port} with routes "
-        "auto|local -> local_vllm, reasoning -> gemini_fallback, heavy -> openai_reasoning"
+    _log_info(
+        "router_started",
+        host=config.host,
+        port=config.port,
+        request_timeout_s=config.request_timeout_s,
+        gemini_enabled=config.enable_gemini_fallback,
+        openai_enabled=config.enable_openai_fallback,
     )
     server.serve_forever()
 
