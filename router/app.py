@@ -249,6 +249,7 @@ class RouterRequestHandler(BaseHTTPRequestHandler):
             return
 
         try:
+            # Validate once at the HTTP edge; downstream router methods assume a valid payload.
             validate_chat_request_payload(payload)
         except RoutingPolicyError as exc:
             self._write_response(exc.status_code, exc.payload)
@@ -301,9 +302,6 @@ class RouterRequestHandler(BaseHTTPRequestHandler):
         try:
             stream = self.server.app.stream_chat_completions(payload)
         except RoutingPolicyError as exc:
-            self._write_response(exc.status_code, exc.payload)
-            return
-        except RequestValidationError as exc:
             self._write_response(exc.status_code, exc.payload)
             return
         except ProviderError as exc:
