@@ -31,7 +31,7 @@ Die Laufzeitdaten liegen bewusst ausserhalb von Git:
 Alle Befehle unten werden vom Repository-Root aus ausgefuehrt.
 
 1. `cp vllm/.env.example vllm/.env`
-2. Trage `HF_TOKEN` in `vllm/.env` ein, falls du private oder rate-limitierte Hugging-Face-Artefakte brauchst.
+2. Trage `HUGGING_FACE_HUB_TOKEN` in `vllm/.env` ein, falls du private oder rate-limitierte Hugging-Face-Artefakte brauchst.
 
 ## Server starten
 
