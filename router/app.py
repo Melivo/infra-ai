@@ -106,6 +106,7 @@ class RouterApplication:
                 "object": "router.capabilities",
                 "schema_version": CAPABILITIES_SCHEMA_VERSION,
                 "router_version": ROUTER_VERSION,
+                "frontend_contract": _build_frontend_contract_capabilities(),
                 "available_routes": available_routes,
                 "enabled_providers": enabled_providers,
                 "streaming_support": {
@@ -385,6 +386,35 @@ def _build_openai_capabilities(config: RouterConfig) -> JSONValue:
         "responses_slots": list(OPENAI_RESPONSES_SLOTS),
         "standard_inference_api": "responses",
         "separate_realtime_api": True,
+    }
+
+
+def _build_frontend_contract_capabilities() -> JSONValue:
+    return {
+        "multi_frontend": True,
+        "router_role": "shared_chat_and_inference_platform",
+        "reference_frontends": [
+            {
+                "id": "terminal_cli",
+                "status": "implemented",
+                "notes": "Reference frontend that talks to the router over HTTP.",
+            }
+        ],
+        "planned_frontends": [
+            {
+                "id": "code_oss_ide_chat",
+                "status": "planned",
+                "notes": "Future IDE chat client for Code OSS using the same router contract.",
+            }
+        ],
+        "shared_contract": {
+            "capabilities_endpoint": "/v1/router/capabilities",
+            "chat_endpoint": "/v1/chat/completions",
+            "routing_modes": list(ROUTING_MODES),
+            "streaming_via_router": True,
+            "provider_logic_in_frontends": False,
+            "model_selection_in_frontends": False,
+        },
     }
 
 

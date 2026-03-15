@@ -2,12 +2,12 @@
 
 `infra-ai` ist ein lokaler AI-Hub mit einem zentralen Router als Infrastruktur-Schicht.
 
-Die aktuelle Zielarchitektur ist bewusst klein gehalten:
+Die aktuelle Zielarchitektur ist bewusst klein gehalten und frontend-agnostisch:
 
 - Default lokal ueber `vLLM`
 - Reasoning-Fallback ueber `Gemini API`
 - Heavy-Reasoning-Fallback ueber `OpenAI API`
-- spaetere Frontends, inklusive Terminal-CLI, sprechen nur mit dem Router
+- mehrere Frontends, inklusive Terminal und spaeterem IDE-Chat, sprechen nur mit dem Router
 
 Die fruehere Idee eines zusaetzlichen grossen lokalen Reasoning-Modells auf derselben RTX 4090 ist verworfen. `vLLM` bleibt die reine lokale Inference-Schicht fuer `Qwen/Qwen3-14B-AWQ`.
 
@@ -21,6 +21,8 @@ infra-ai/
   config/
     router.example.env
     providers.example.env
+  docs/
+    frontends.md
   router/
     app.py
     policies.py
@@ -50,21 +52,22 @@ infra-ai/
 Der Router ist die zentrale API und Routing-Instanz.
 
 ```text
-CLI / spaetere Frontends
-  -> Router API
-    -> local_vllm
-    -> gemini_fallback
-    -> openai_responses
+Terminal CLI ----\
+                  -> Router API -> local_vllm
+Code OSS IDE ----/             -> gemini_fallback
+                                -> openai_responses
 ```
 
 Wichtige Leitplanken:
 
-- Die CLI ist nur ein Client vor dem Router.
+- Die CLI ist ein Referenz-Frontend, nicht das einzige Frontend.
+- Eine spaetere Code-OSS-Integration ist ebenfalls nur ein Frontend vor dem Router.
 - Provider-Logik bleibt im Backend.
 - `vLLM` bleibt lokal und zustandsarm.
 - API-Provider sind optional konfigurierbar.
 - Keine stillen Cloud-Fallbacks: der Request bestimmt den Routing-Modus explizit.
 - Streaming ist minimal ueber den Router verfuegbar, aktuell nur fuer den lokalen Pfad.
+- Alle Frontends nutzen denselben Router-Vertrag fuer Chat, Routing und Capabilities.
 
 ## Runtime-Daten
 
@@ -117,6 +120,7 @@ Aktuell exponiert er:
 
 Er liefert nur oeffentliche, aus der aktuellen Konfiguration ableitbare Informationen, zum Beispiel:
 
+- `frontend_contract`
 - `available_routes`
 - `enabled_providers`
 - `streaming_support`
@@ -126,6 +130,8 @@ Er liefert nur oeffentliche, aus der aktuellen Konfiguration ableitbare Informat
 - `not_yet_supported`
 
 Die Antwort enthaelt bewusst keine Secrets, keine API-Keys und keine sensitiven Provider-Credentials.
+
+Der `frontend_contract`-Block macht explizit sichtbar, dass der Router fuer mehrere Clients gedacht ist und welche Endpunkte bzw. Regeln gemeinsam fuer Terminal und spaetere IDE-Frontends gelten.
 
 ## OpenAI-Semantik
 
@@ -167,7 +173,7 @@ Wenn `reasoning` oder `heavy` angefordert werden und der jeweilige Provider nich
 
 ## Minimale CLI
 
-Die CLI ist ein bewusst duennes Frontend und enthaelt keine Provider- oder Agentenlogik.
+Die CLI ist ein bewusst duennes Referenz-Frontend und enthaelt keine Provider- oder Agentenlogik.
 
 ```bash
 python3 -m cli.main --route local "Fasse in einem Satz zusammen, wofuer infra-ai gebaut ist."
@@ -197,6 +203,17 @@ Aktuelle Streaming-Grenze:
 
 - `--stream` ist fuer `local` und damit auch fuer `auto` gedacht, weil `auto` derzeit deterministisch lokal aufloest.
 - Fuer `reasoning` und `heavy` liefert der Router einen klaren Fehler statt Fake-Streaming.
+
+## Mehrere Frontends
+
+infra-ai ist jetzt explizit als Router-Plattform fuer mehrere Frontends positioniert:
+
+- Terminal-CLI ist das heutige Referenz-Frontend.
+- ein spaeterer Chat in Code OSS ist als zusaetzliches Frontend vorgesehen.
+- beide sollen denselben Router-Vertrag verwenden.
+- weder CLI noch IDE duplizieren Provider- oder Modelllogik.
+
+Die Frontend-Grenze ist separat beschrieben in [docs/frontends.md](/home/visimeos/Projects/infra-ai/docs/frontends.md).
 
 ## Smoke-Checks
 
@@ -235,6 +252,7 @@ Public repo-tauglich:
 - `Gemini`- und `OpenAI`-Fallback-Schnittstellen ohne echte Secrets
 - die semantischen OpenAI-Slots und ihre API-Trennung
 - CLI-Code
+- Doku fuer spaetere Frontends wie Code OSS
 - Beispielkonfigurationen
 - README und Smoke-Skripte
 - der oeffentliche Routing-Vertrag mit `route=auto|local|reasoning|heavy`
