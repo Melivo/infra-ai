@@ -18,19 +18,19 @@ services:
     shm_size: "2gb"
     ipc: host
     command:
-      - --model
-      - Qwen/Qwen3-32B-AWQ
-      - --quantization
-      - awq_marlin
+      - serve
+      - Qwen/Qwen3-14B-AWQ
       - --host
       - 0.0.0.0
+      - --quantization
+      - awq_marlin
       - --port
       - "8000"
       - --dtype
       - auto
       - --gpu-memory-utilization
-      - "0.80"
+      - "0.9"
       - --enforce-eager
       - --max-model-len
-      - "8192"
+      - "4096"
       - --trust-remote-code

@@ -1,6 +1,6 @@
 # infra-ai
 
-Minimales lokales Inference-Backend fuer den quantisierten `Qwen/Qwen3-32B-AWQ` mit `vLLM` und OpenAI-kompatibler API auf `http://localhost:8000/v1`.
+Minimales lokales Inference-Backend fuer den quantisierten `Qwen/Qwen3-14B-AWQ` mit `vLLM` und OpenAI-kompatibler API auf `http://localhost:8000/v1`.
 
 ## Struktur
 
@@ -41,6 +41,12 @@ docker compose -f vllm/docker-compose.yml --env-file vllm/.env up -d
 
 Der Container heisst `vllm-qwen` und exponiert Port `8000`.
 
+## Default-Modell
+
+Das lokale Default-Modell ist `Qwen/Qwen3-14B-AWQ`, weil es auf einer einzelnen RTX 4090 (24 GB VRAM) stabil startet und als schneller lokaler Standard fuer den AI-Hub taugt.
+
+Groessere Modelle wie `Qwen3-32B` und darueber sind fuer Multi-GPU-Setups, Cloud-Inference oder einen OpenAI-Fallback gedacht.
+
 ## Healthcheck
 
 ```bash
@@ -65,8 +71,8 @@ pre-commit run --all-files
 ## Hinweise
 
 - `vllm/.env` ist lokal und darf nicht committed werden.
-- Das Single-4090-Setup nutzt `Qwen/Qwen3-32B-AWQ` mit `awq_marlin`; `Qwen/Qwen3-32B` in Full Precision passt auf 24 GB VRAM nicht zuverlaessig.
-- Die niedrigere GPU-Memory-Auslastung ist absichtlich konservativ, damit das Modell auf einem Desktop-System mit bereits belegtem VRAM zuverlaessig startet.
+- Das Single-4090-Setup nutzt `Qwen/Qwen3-14B-AWQ` mit `awq_marlin`.
+- Die Speichereinstellungen sind bewusst auf stabile Starts mit einer einzelnen RTX 4090 ausgelegt.
 - `--enforce-eager` ist auf Single-4090-Desktop-Systemen aktiviert, um Startup-OOMs waehrend Compile- und Autotuning-Phasen zu vermeiden.
 - Die vLLM-Parameter sind fuer eine einzelne RTX 4090 (24 GB VRAM) abgestimmt.
-- `--trust-remote-code` ist fuer `Qwen/Qwen3-32B-AWQ` aktiviert.
+- `--trust-remote-code` ist fuer `Qwen/Qwen3-14B-AWQ` aktiviert.
