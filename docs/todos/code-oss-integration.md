@@ -126,7 +126,7 @@ Medium to high. Useful as one transport pattern, but incomplete without router-s
 
 Preferred solution:
 
-**Custom VS Code / Code OSS Extension**
+### Custom VS Code / Code OSS Extension
 
 ```text
 Code OSS IDE
