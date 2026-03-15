@@ -36,14 +36,17 @@ Wichtig:
 
 ```text
 Frontend
-  -> Router
-    -> Model / Routing Layer
-      -> Tool Call Decision
-        -> Tool Execution Layer
-          -> Filesystem Tools
-          -> Git Tools
-          -> HTTP Tools
-          -> MCP Adapters
+  -> Router API
+    -> Route / Policy Layer
+      -> Model Invocation
+        -> Tool Orchestrator
+          -> Tool Executor
+            -> Filesystem Tools
+            -> Git Tools
+            -> HTTP Tools
+            -> MCP Adapters
+        -> Model Finalization
+  -> Response
 ```
 
 Oder aus Sicht eines spaeteren agentischen Flows:
@@ -59,6 +62,41 @@ User
 ```
 
 Der Router bleibt dabei die einzige Schicht, die Modellantworten, Tool Policies, Tool-Aufrufe und Tool-Ergebnisse zusammenfuehrt.
+
+## Tool Iteration Loop
+
+Fuer die spaetere Laufzeitsequenz sollte der Tool Layer bewusst kontrolliert bleiben.
+
+Vorgeschlagener Ablauf:
+
+```text
+User Request
+  -> Router
+    -> Model Response
+      -> ToolCall detected
+        -> Policy check
+          -> Executor run
+            -> ToolResult
+              -> ToolResult injected into conversation / context
+                -> Model continues
+                  -> Final Response
+```
+
+Wichtige Phase-1-Regel:
+
+- Phase 1 sollte einen harten Grenzwert fuer Tool-Schritte haben
+- vorgeschlagen: `max_tool_steps` als kleine feste Obergrenze
+- keine offenen oder unendlichen Tool-Loops
+- kein autonomes Iterieren ohne klaren Stop-Zustand
+
+Phase 1 ist damit bewusst klein:
+
+- ein Modell darf Tool-Aufrufe nur vorschlagen
+- der Router erkennt und prueft sie
+- nur erlaubte Tool-Aufrufe werden ausgefuehrt
+- nach einer kleinen festen Anzahl von Tool-Schritten ist Schluss
+
+Das dient der Kontrollierbarkeit, Fehlerbegrenzung und einfacheren Beobachtbarkeit.
 
 ## Empfohlene Kernkomponenten
 
@@ -84,7 +122,8 @@ Zweck:
 
 - Tool-Aufrufe innerhalb des Routers koordinieren
 - Validierung, Policy-Pruefung und Ausfuehrung verbinden
-- spaeter auch mehrere Tool-Schritte kontrolliert zusammensetzen
+- mehrere Tool-Schritte kontrolliert zusammensetzen
+- Stop-Bedingungen und `max_tool_steps` durchsetzen
 
 ### Tool Executor
 
@@ -145,6 +184,7 @@ Beispielhafte Felder:
 - `capabilities`
 - `requires_confirmation`
 - `timeout_s`
+- `enabled`
 
 ### ToolCall
 
@@ -181,6 +221,39 @@ Beispielhafte Felder:
 - `http_allowlist`
 - `user_intent`
 - `session_id`
+- `tool_step`
+- `max_tool_steps`
+
+## Router Capabilities fuer Tools
+
+Tool-Verfuegbarkeit sollte spaeter ueber den bestehenden Router-Mechanismus sichtbar gemacht werden, nicht ueber Frontend-spezifische Logik.
+
+Die bevorzugte Richtung ist:
+
+- Tool-Verfuegbarkeit wird ueber `GET /v1/router/capabilities` sichtbar
+- Frontends lesen diese Informationen nur aus
+- Frontends implementieren keine eigene Tool-Allowlist
+- Frontends entscheiden nicht selbst, welche Tools wirklich ausfuehrbar sind
+
+Moegliche spaetere Richtung, nur als Vorschlag:
+
+```json
+{
+  "tools": [
+    "filesystem.read",
+    "git.status",
+    "http.fetch"
+  ]
+}
+```
+
+Das ist ausdruecklich noch nicht implementiert.
+
+Die Absicht ist:
+
+- der Router bleibt Quelle der Wahrheit fuer Tool-Verfuegbarkeit
+- Frontends bleiben duenne Clients
+- spaetere UIs koennen Tool-Support anzeigen, ohne Tool-Logik zu duplizieren
 
 ## Sicherheitsprinzipien
 
@@ -192,6 +265,7 @@ Beispielhafte Felder:
 - Logging ohne Secrets oder sensible Inhalte
 - keine implizite Freigabe gefaehrlicher Operationen
 - klare Trennung zwischen Lese- und Schreibwerkzeugen
+- feste Obergrenzen fuer Tool-Iterationen
 
 Phase 1 sollte nur kontrollierte, nachvollziehbare Tools erlauben.
 
@@ -206,6 +280,7 @@ Das bedeutet:
 - Agents duerfen nicht zu einem separaten Ausfuehrungssystem werden
 - Agents planen Tool-Nutzung, aber der Router validiert und fuehrt aus
 - Tool Policies bleiben backend-seitig zentral
+- Iterationsgrenzen und Stop-Regeln bleiben backend-seitig zentral
 - Frontends bleiben auch im agentischen Fall duenne Clients
 
 ## Kompatibilitaet mit MCP
@@ -236,6 +311,7 @@ Begruendung:
 - Dateisystem und Git sind fuer Entwicklungs- und Projektkontext naheliegend
 - `http.fetch` ist fuer kontrollierte externe Datenzugriffe nuetzlich
 - freie Shell-Ausfuehrung ist deutlich riskanter und sollte nicht der erste Schritt sein
+- eine kleine feste Obergrenze fuer Tool-Schritte ist in Phase 1 realistisch und kontrollierbar
 
 ## To-do-Liste
 
@@ -244,8 +320,10 @@ Begruendung:
 - [ ] Entscheidung fuer zentrale Tool Registry dokumentieren
 - [ ] Policy-Modell fuer Deny-by-default und Scope-Grenzen festlegen
 - [ ] Timeouts und Fehlervertrag fuer Tool-Aufrufe definieren
+- [ ] Tool-Iteration-Loop und `max_tool_steps` fuer Phase 1 festlegen
 - [ ] ersten Satz sicherer Phase-1-Tools festlegen
 - [ ] Trennung zwischen Registry, Policy, Orchestrator und Executor dokumentieren
+- [ ] Tool-Verfuegbarkeit ueber `GET /v1/router/capabilities` einordnen
 - [ ] MCP als Adapter-Modell in die Architektur einordnen
 - [ ] Agent-Kompatibilitaet dokumentieren, ohne Agenten jetzt zu bauen
 - [ ] pruefen, welche Teile public-repo-tauglich und welche privat bleiben muessen
@@ -254,10 +332,12 @@ Begruendung:
 
 - Wie stark soll ein Modell Tool-Aufrufe direkt anstossen duerfen?
 - Wo liegt die Grenze zwischen Tool Orchestrator und spaeterem Agent Layer?
+- Wie klein soll `max_tool_steps` in Phase 1 konkret sein?
 - Soll `filesystem.write` in Phase 1 schon erlaubt sein oder erst nach rein lesenden Tools?
 - Wie fein soll die HTTP-Allowlist sein?
 - Wie werden Nutzerbestaetigungen fuer riskantere Tools spaeter eingebaut?
 - Wie werden MCP-Adapter in dieselben Policies eingebunden?
+- Wie detailliert sollen Tool-Capabilities spaeter im Router sichtbar sein?
 - Wie viel Tool-Kontext darf in Logs auftauchen, ohne sensible Inhalte preiszugeben?
 
 ## Akzeptanzkriterien fuer „Tool Layer Phase 1 geplant“
@@ -269,4 +349,7 @@ Begruendung:
 - Phase-1-Tools sind bewusst klein und realistisch ausgewaehlt
 - die spaetere Kompatibilitaet mit Agents ist beschrieben, ohne Agenten vorzuziehen
 - die spaetere Kompatibilitaet mit MCP ist als Adapter-Modell beschrieben
+- der Tool-Iteration-Loop ist beschrieben
+- eine feste Phase-1-Grenze gegen Endlosschleifen ist benannt
+- die spaetere Sichtbarkeit von Tools ueber Router-Capabilities ist beschrieben
 - es gibt eine konkrete To-do-Liste fuer die naechste Architekturphase
