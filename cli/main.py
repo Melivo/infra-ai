@@ -6,6 +6,8 @@ import os
 import sys
 from urllib import error, request
 
+from cli.tool_selector import select_tools
+
 ROUTING_MODES = ("auto", "local", "reasoning", "heavy")
 
 
@@ -18,13 +20,14 @@ def build_payload(
     temperature: float,
     max_tokens: int,
     stream: bool,
+    allowed_tools: list[str] | None,
 ) -> dict[str, object]:
     messages: list[dict[str, str]] = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": prompt})
 
-    return {
+    payload: dict[str, object] = {
         "model": model,
         "route": route,
         "messages": messages,
@@ -32,6 +35,9 @@ def build_payload(
         "max_tokens": max_tokens,
         "stream": stream,
     }
+    if allowed_tools:
+        payload["allowed_tools"] = allowed_tools
+    return payload
 
 
 def request_json(*, url: str, payload: dict[str, object] | None, timeout_s: float) -> dict[str, object]:
@@ -243,6 +249,7 @@ def main() -> None:
         return
 
     prompt = _read_prompt(args)
+    selected_tools = select_tools(args.base_url)
     payload = build_payload(
         prompt=prompt,
         model=args.model,
@@ -251,6 +258,7 @@ def main() -> None:
         temperature=args.temperature,
         max_tokens=args.max_tokens,
         stream=args.stream,
+        allowed_tools=selected_tools or None,
     )
 
     if args.stream:

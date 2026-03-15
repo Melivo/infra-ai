@@ -309,6 +309,12 @@ Capabilities abrufen:
 python3 -m cli.main --capabilities
 ```
 
+## CLI Tool Selection
+
+`infra-ai` CLI laedt verfuegbare Tools ueber `GET /v1/router/capabilities` und bietet beim Start eine kleine Terminal-Auswahl an.
+
+Die Auswahl wird als `allowed_tools` an den Router gesendet. Die eigentliche Tool-Freigabe und Tool-Kontrolle bleibt im Router. Eine spaetere klickbare oder reichere Tool-UI gehoert in ein Frontend wie eine TUI, nicht in den Router selbst.
+
 Optional mit stdin:
 
 ```bash
