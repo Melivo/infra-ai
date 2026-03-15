@@ -402,7 +402,7 @@ def load_config() -> RouterConfig:
         "INFRA_AI_OPENAI_BASE_URL",
         "https://api.openai.com/v1",
     )
-    legacy_openai_default_model = os.environ.get("INFRA_AI_OPENAI_DEFAULT_MODEL", "gpt-5.4")
+    legacy_openai_default_model = os.environ.get("INFRA_AI_OPENAI_DEFAULT_MODEL", "gpt-5.2")
 
     return RouterConfig(
         host=os.environ.get("INFRA_AI_ROUTER_HOST", "127.0.0.1"),
@@ -447,7 +447,7 @@ def load_config() -> RouterConfig:
         openai_api_key=os.environ.get("OPENAI_API_KEY"),
         openai_text_model=os.environ.get(
             "INFRA_AI_OPENAI_TEXT_MODEL",
-            "gpt-5.4",
+            "gpt-5.2",
         ),
         openai_reasoning_model=os.environ.get(
             "INFRA_AI_OPENAI_REASONING_MODEL",
@@ -455,7 +455,7 @@ def load_config() -> RouterConfig:
         ),
         openai_tools_model=os.environ.get(
             "INFRA_AI_OPENAI_TOOLS_MODEL",
-            os.environ.get("INFRA_AI_OPENAI_TEXT_MODEL", "gpt-5.4"),
+            os.environ.get("INFRA_AI_OPENAI_TEXT_MODEL", "gpt-5.2"),
         ),
         openai_realtime_model=os.environ.get(
             "INFRA_AI_OPENAI_REALTIME_MODEL",
