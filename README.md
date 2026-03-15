@@ -65,6 +65,7 @@ pre-commit run --all-files
 ## Hinweise
 
 - `vllm/.env` ist lokal und darf nicht committed werden.
-- Das Single-4090-Setup nutzt das quantisierte Qwen3-32B-AWQ-Modell; `Qwen/Qwen3-32B` in Full Precision passt auf 24 GB VRAM nicht zuverlaessig.
+- Das Single-4090-Setup nutzt `Qwen/Qwen3-32B-AWQ` mit `awq_marlin`; `Qwen/Qwen3-32B` in Full Precision passt auf 24 GB VRAM nicht zuverlaessig.
+- Die niedrigere GPU-Memory-Auslastung ist absichtlich konservativ, damit das Modell auf einem Desktop-System mit bereits belegtem VRAM zuverlaessig startet.
 - Die vLLM-Parameter sind fuer eine einzelne RTX 4090 (24 GB VRAM) abgestimmt.
 - `--trust-remote-code` ist fuer `Qwen/Qwen3-32B-AWQ` aktiviert.
