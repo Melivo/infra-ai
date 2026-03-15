@@ -7,7 +7,7 @@ from email.message import Message
 from urllib.response import addinfourl
 
 from router.app import RouterApplication, RouterRequestHandler
-from router.providers.base import Provider
+from router.providers.base import Provider, ProviderError
 from router.schemas import JSONValue, RouterConfig
 
 
@@ -94,6 +94,32 @@ class StubProvider(Provider):
         headers["Content-Type"] = "text/event-stream"
         body = f"data: {{\"provider\": \"{self.name}\"}}\n\n".encode("utf-8")
         return addinfourl(io.BytesIO(body), headers, "http://stub.local/stream", 200)
+
+
+class ErrorProvider(Provider):
+    def __init__(
+        self,
+        name: str,
+        *,
+        list_error: ProviderError | None = None,
+        chat_error: ProviderError | None = None,
+        stream_error: ProviderError | None = None,
+    ) -> None:
+        self.name = name
+        self.list_error = list_error
+        self.chat_error = chat_error
+        self.stream_error = stream_error
+
+    def list_models(self) -> tuple[int, JSONValue]:
+        raise self.list_error or ProviderError("unexpected list error")
+
+    def chat_completions(self, payload: dict[str, JSONValue]) -> tuple[int, JSONValue]:
+        del payload
+        raise self.chat_error or ProviderError("unexpected chat error")
+
+    def stream_chat_completions(self, payload: dict[str, JSONValue]) -> addinfourl:
+        del payload
+        raise self.stream_error or ProviderError("unexpected stream error")
 
 
 class _NonClosingBytesIO(io.BytesIO):
@@ -212,6 +238,16 @@ class RouterHTTPContractTests(unittest.TestCase):
         }
         app.providers = providers
         return app, providers
+
+    def make_error_app(self, config: RouterConfig, provider_name: str, provider: Provider) -> RouterApplication:
+        app = RouterApplication(config)
+        app.providers = {
+            "local_vllm": StubProvider("local_vllm", stream_supported=True),
+            "gemini_fallback": StubProvider("gemini_fallback"),
+            "openai_responses": StubProvider("openai_responses"),
+        }
+        app.providers[provider_name] = provider
+        return app
 
     def test_healthz_contract_is_stable(self) -> None:
         app, _ = self.make_app(build_config())
@@ -439,6 +475,91 @@ class RouterHTTPContractTests(unittest.TestCase):
         )
         self.assertEqual(status_code, 404)
         self.assert_error_payload(payload, error_type="unsupported_path")
+
+    def test_chat_provider_errors_are_normalized(self) -> None:
+        app = self.make_error_app(
+            build_config(),
+            "local_vllm",
+            ErrorProvider(
+                "local_vllm",
+                chat_error=ProviderError(
+                    "local_vllm returned status 429",
+                    status_code=429,
+                    payload={
+                        "error": {
+                            "type": "rate_limit_exceeded",
+                            "message": "Quota exceeded.",
+                        }
+                    },
+                ),
+            ),
+        )
+
+        status_code, response_headers, payload = perform_json_request(
+            app,
+            method="POST",
+            path="/v1/chat/completions",
+            body=build_payload(route="local"),
+        )
+
+        self.assertEqual(status_code, 429)
+        self.assertEqual(response_headers["content-type"], "application/json")
+        self.assert_error_payload(payload, error_type="rate_limited")
+        self.assertEqual(payload["error"]["message"], "Quota exceeded.")
+
+    def test_stream_provider_errors_are_normalized(self) -> None:
+        app = self.make_error_app(
+            build_config(),
+            "local_vllm",
+            ErrorProvider(
+                "local_vllm",
+                stream_error=ProviderError(
+                    "local_vllm returned status 401",
+                    status_code=401,
+                    payload={"message": "Bad API key."},
+                ),
+            ),
+        )
+
+        status_code, response_headers, response_body = perform_http_request(
+            app,
+            method="POST",
+            path="/v1/chat/completions",
+            body=json.dumps(build_payload(route="local", stream=True)).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+
+        self.assertEqual(status_code, 401)
+        self.assertEqual(response_headers["content-type"], "application/json")
+        self.assert_error_payload(
+            json.loads(response_body.decode("utf-8")),
+            error_type="auth_error",
+        )
+
+    def test_models_provider_errors_are_normalized(self) -> None:
+        app = self.make_error_app(
+            build_config(),
+            "local_vllm",
+            ErrorProvider(
+                "local_vllm",
+                list_error=ProviderError(
+                    "local_vllm returned status 502",
+                    status_code=502,
+                    payload={"detail": "Bad gateway from upstream."},
+                ),
+            ),
+        )
+
+        status_code, response_headers, payload = perform_json_request(
+            app,
+            method="GET",
+            path="/v1/models",
+        )
+
+        self.assertEqual(status_code, 502)
+        self.assertEqual(response_headers["content-type"], "application/json")
+        self.assert_error_payload(payload, error_type="provider_unavailable")
+        self.assertEqual(payload["error"]["message"], "Bad gateway from upstream.")
 
 
 if __name__ == "__main__":

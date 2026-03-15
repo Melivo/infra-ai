@@ -16,7 +16,7 @@ from router.policies import (
     route_streaming_supported,
     select_provider,
 )
-from router.providers.base import Provider, ProviderError
+from router.providers.base import Provider, ProviderError, normalize_provider_error
 from router.providers.gemini_fallback import GeminiFallbackProvider
 from router.providers.local_vllm import LocalVLLMProvider
 from router.providers.openai import (
@@ -205,7 +205,7 @@ class RouterApplication:
         try:
             return action(provider)
         except ProviderError as exc:
-            return exc.status_code, exc.payload or _error_payload("provider_error", str(exc))
+            return exc.status_code, normalize_provider_error(exc)
 
 
 class RouterHTTPServer(ThreadingHTTPServer):
@@ -307,7 +307,7 @@ class RouterRequestHandler(BaseHTTPRequestHandler):
         except ProviderError as exc:
             self._write_response(
                 exc.status_code,
-                exc.payload or _error_payload("provider_error", str(exc)),
+                normalize_provider_error(exc),
             )
             return
 
