@@ -28,14 +28,15 @@ Die Laufzeitdaten liegen bewusst ausserhalb von Git:
 
 ## Vorbereitung
 
+Alle Befehle unten werden vom Repository-Root aus ausgefuehrt.
+
 1. `cp vllm/.env.example vllm/.env`
 2. Trage `HF_TOKEN` in `vllm/.env` ein, falls du private oder rate-limitierte Hugging-Face-Artefakte brauchst.
 
 ## Server starten
 
 ```bash
-cd vllm
-docker compose up -d
+docker compose -f vllm/docker-compose.yml --env-file vllm/.env up -d
 ```
 
 Der Container heisst `vllm-qwen` und exponiert Port `8000`.
