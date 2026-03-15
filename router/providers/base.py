@@ -10,7 +10,7 @@ from urllib import error, request
 from router.schemas import JSONValue
 
 AUTO_MODEL_ALIASES = {"", "auto", "default", "router-default"}
-ROUTER_CONTROL_FIELDS = {"route", "provider_slot"}
+ROUTER_CONTROL_FIELDS = {"route", "provider_slot", "tool_call", "allowed_tools"}
 PUBLIC_PROVIDER_ERROR_TYPES = {
     "invalid_messages",
     "invalid_message",

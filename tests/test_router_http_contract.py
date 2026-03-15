@@ -305,7 +305,18 @@ class RouterHTTPContractTests(unittest.TestCase):
         self.assertEqual(payload["available_routes"]["reasoning"]["streaming"], False)
         self.assertIn("local", payload["streaming_support"]["routes"])
         self.assertNotIn("reasoning", payload["streaming_support"]["routes"])
-        self.assertEqual(payload["tools"], ["echo"])
+        self.assertEqual(
+            payload["tools"],
+            [
+                {
+                    "name": "echo",
+                    "description": "Return the provided arguments unchanged.",
+                    "risk_level": "low",
+                    "capabilities": ["debug"],
+                    "enabled_by_default": True,
+                }
+            ],
+        )
 
     def test_models_contract_currently_routes_to_local_provider(self) -> None:
         app, providers = self.make_app(
@@ -375,6 +386,7 @@ class RouterHTTPContractTests(unittest.TestCase):
             method="POST",
             path="/v1/chat/completions",
             body=build_payload(
+                allowed_tools=["echo"],
                 tool_call={
                     "name": "echo",
                     "arguments": {"message": "hello"},
@@ -389,6 +401,29 @@ class RouterHTTPContractTests(unittest.TestCase):
         self.assertEqual(payload["tool_result"]["ok"], True)
         self.assertEqual(payload["tool_result"]["output_json"], {"message": "hello"})
         self.assertEqual(payload["choices"][0]["message"]["role"], "assistant")
+        self.assertEqual(providers["local_vllm"].last_payload, None)
+        self.assertEqual(providers["gemini_fallback"].last_payload, None)
+        self.assertEqual(providers["openai_responses"].last_payload, None)
+
+    def test_tool_call_is_rejected_when_not_in_allowed_tools(self) -> None:
+        app, providers = self.make_app(build_config())
+
+        status_code, response_headers, payload = perform_json_request(
+            app,
+            method="POST",
+            path="/v1/chat/completions",
+            body=build_payload(
+                allowed_tools=[],
+                tool_call={
+                    "name": "echo",
+                    "arguments": {"message": "hello"},
+                },
+            ),
+        )
+
+        self.assertEqual(status_code, 403)
+        self.assertEqual(response_headers["content-type"], "application/json")
+        self.assert_error_payload(payload, error_type="tool_not_allowed")
         self.assertEqual(providers["local_vllm"].last_payload, None)
         self.assertEqual(providers["gemini_fallback"].last_payload, None)
         self.assertEqual(providers["openai_responses"].last_payload, None)

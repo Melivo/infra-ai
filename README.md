@@ -208,8 +208,11 @@ Eine detaillierte Anleitung zum Schreiben eines Tools steht in [docs/tools.md](/
 Aktuell ist die Router-Integration bewusst klein:
 
 - `POST /v1/chat/completions` akzeptiert optional ein Feld `tool_call`
+- `POST /v1/chat/completions` akzeptiert optional ein Feld `allowed_tools`
 - derzeit ist nur das Beispieltool `echo` registriert
 - `tool_call` ist ein expliziter Router-Pfad und noch keine allgemeine LLM-Tool-Calling-Implementierung
+- `GET /v1/router/capabilities` liefert kleine Tool-Metadaten fuer spaetere Frontend-Auswahl
+- eine spaetere klickbare oder waehlbare Tool-UI gehoert ins CLI/TUI-Frontend, nicht in den Router
 
 Beispiel:
 
@@ -227,7 +230,8 @@ Beispiel:
     "arguments": {
       "message": "hello"
     }
-  }
+  },
+  "allowed_tools": ["echo"]
 }
 ```
 

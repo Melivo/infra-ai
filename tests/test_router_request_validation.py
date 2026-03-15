@@ -111,6 +111,24 @@ class RouterRequestValidationTests(unittest.TestCase):
 
         self.assertEqual(exc_info.exception.payload["error"]["type"], "invalid_tool_call")
 
+    def test_allowed_tools_must_be_a_list_or_null(self) -> None:
+        with self.assertRaises(RequestValidationError) as exc_info:
+            validate_chat_request_payload(build_payload(allowed_tools="echo"))
+
+        self.assertEqual(
+            exc_info.exception.payload["error"]["type"],
+            "invalid_allowed_tools",
+        )
+
+    def test_allowed_tools_entries_must_be_non_blank_strings(self) -> None:
+        with self.assertRaises(RequestValidationError) as exc_info:
+            validate_chat_request_payload(build_payload(allowed_tools=["echo", " "]))
+
+        self.assertEqual(
+            exc_info.exception.payload["error"]["type"],
+            "invalid_allowed_tools",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

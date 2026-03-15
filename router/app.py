@@ -164,7 +164,16 @@ class RouterApplication:
                     "openai_realtime": self.config.openai_realtime_model,
                 },
                 "openai": _build_openai_capabilities(self.config),
-                "tools": [spec.name for spec in self.tool_registry.list_enabled_specs()],
+                "tools": [
+                    {
+                        "name": spec.name,
+                        "description": spec.description,
+                        "risk_level": spec.risk_level.value,
+                        "capabilities": list(spec.capabilities),
+                        "enabled_by_default": spec.enabled_by_default,
+                    }
+                    for spec in self.tool_registry.list_specs()
+                ],
                 "not_yet_supported": [
                     "streaming for reasoning route",
                     "streaming for heavy route",
@@ -229,9 +238,18 @@ class RouterApplication:
 
     def execute_tool_call(self, payload: dict[str, JSONValue]) -> tuple[int, JSONValue]:
         tool_call_payload = cast(dict[str, JSONValue], payload["tool_call"])
+        allowed_tools = payload.get("allowed_tools")
+        tool_name = cast(str, tool_call_payload["name"])
+
+        if isinstance(allowed_tools, list) and tool_name not in allowed_tools:
+            return HTTPStatus.FORBIDDEN, _error_payload(
+                "tool_not_allowed",
+                f"tool={tool_name} is not permitted by allowed_tools for this request.",
+            )
+
         tool_call = ToolCall(
             call_id=f"toolcall-{uuid4().hex}",
-            name=cast(str, tool_call_payload["name"]),
+            name=tool_name,
             arguments=cast(dict[str, JSONValue], tool_call_payload["arguments"]),
         )
         ctx = ToolContext(request_id=f"req-{uuid4().hex}")
@@ -537,6 +555,9 @@ def validate_chat_request_payload(payload: dict[str, JSONValue]) -> None:
     if "model" in payload:
         _validate_model_field(payload["model"])
 
+    if "allowed_tools" in payload:
+        _validate_allowed_tools(payload["allowed_tools"])
+
     if "tool_call" in payload:
         _validate_tool_call(payload["tool_call"])
         if payload.get("stream") is True:
@@ -604,6 +625,24 @@ def _validate_tool_call(tool_call: JSONValue) -> None:
             "invalid_tool_call",
             "The tool_call.arguments field must be a JSON object.",
         )
+
+
+def _validate_allowed_tools(allowed_tools: JSONValue) -> None:
+    if allowed_tools is None:
+        return
+
+    if not isinstance(allowed_tools, list):
+        raise RequestValidationError(
+            "invalid_allowed_tools",
+            "The allowed_tools field must be null or a JSON array of tool names.",
+        )
+
+    for item in allowed_tools:
+        if not isinstance(item, str) or not item.strip():
+            raise RequestValidationError(
+                "invalid_allowed_tools",
+                "Each allowed_tools entry must be a non-blank string.",
+            )
 
 
 def _validate_messages(messages: JSONValue) -> None:

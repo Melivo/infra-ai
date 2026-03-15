@@ -17,6 +17,8 @@ Der Layer ist damit vorbereitet, aber noch nicht in den Router-Request-Flow inte
 
 Aktuell gibt es einen ersten minimalen Integrationspfad ueber `POST /v1/chat/completions` mit einem expliziten `tool_call`-Feld. Dieser Pfad ist bewusst klein gehalten und dient nur dazu, die bestehende Tool-Pipeline kontrolliert ueber den Router nutzbar zu machen.
 
+Zusätzlich kann ein Request aktuell ein Feld `allowed_tools` mitsenden. Das ist eine kleine clientseitige Allowlist, mit der spaetere Frontends wie CLI oder TUI explizit steuern koennen, welche Tools fuer genau diesen Request freigegeben sind.
+
 ## Grundmodell
 
 ```text
@@ -75,6 +77,16 @@ Der Router registriert aktuell nur ein minimales Beispieltool:
 - `echo`
 
 `echo` gibt die uebergebenen Argumente unveraendert als `ToolResult` zurueck. Das Tool dient nur als Infrastrukturtest fuer Registry, Policy, Orchestrator und den minimalen Router-Integrationspfad.
+
+`GET /v1/router/capabilities` liefert dafuer bereits kleine Tool-Metadaten:
+
+- `name`
+- `description`
+- `risk_level`
+- `capabilities`
+- `enabled_by_default`
+
+Eine spaetere klickbare oder waehlbare Tool-Auswahl ist Aufgabe eines Frontends. Der Router stellt dafuer nur die Metadaten und die Request-Allowlist bereit.
 
 ## Leitlinien fuer spaetere Tool-Implementierungen
 
