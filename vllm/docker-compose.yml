@@ -19,7 +19,9 @@ services:
     ipc: host
     command:
       - --model
-      - Qwen/Qwen3-32B
+      - Qwen/Qwen3-32B-AWQ
+      - --quantization
+      - awq
       - --host
       - 0.0.0.0
       - --port
@@ -27,7 +29,7 @@ services:
       - --dtype
       - auto
       - --gpu-memory-utilization
-      - "0.92"
+      - "0.85"
       - --max-model-len
       - "8192"
       - --trust-remote-code
