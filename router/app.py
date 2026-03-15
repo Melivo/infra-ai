@@ -12,7 +12,6 @@ from router.policies import (
     RoutingPolicyError,
     provider_for_route,
     provider_slot_for_route,
-    resolve_routing_mode,
     route_enabled,
     route_streaming_supported,
     select_provider,
@@ -166,7 +165,6 @@ class RouterApplication:
         return self._run_provider_action(selection.provider_name, lambda provider: provider.list_models())
 
     def chat_completions(self, payload: dict[str, JSONValue]) -> tuple[int, JSONValue]:
-        validate_chat_request_payload(payload)
         try:
             selection = select_provider(
                 path="/v1/chat/completions",
@@ -183,7 +181,6 @@ class RouterApplication:
         )
 
     def stream_chat_completions(self, payload: dict[str, JSONValue]) -> StreamingResponse:
-        validate_chat_request_payload(payload)
         selection = select_provider(
             path="/v1/chat/completions",
             payload=payload,
@@ -345,7 +342,7 @@ def _with_provider_slot(
 
 
 def validate_chat_request_payload(payload: dict[str, JSONValue]) -> None:
-    resolve_routing_mode(payload)
+    _validate_route_field(payload.get("route"))
 
     if "provider_slot" in payload:
         raise RequestValidationError(
@@ -363,6 +360,24 @@ def validate_chat_request_payload(payload: dict[str, JSONValue]) -> None:
         _validate_model_field(payload["model"])
 
     _validate_messages(payload.get("messages"))
+
+
+def _validate_route_field(route: JSONValue) -> None:
+    if route is None:
+        return
+
+    if not isinstance(route, str):
+        raise RequestValidationError(
+            "invalid_route",
+            "The route field must be one of: auto, local, reasoning, heavy.",
+        )
+
+    normalized_route = route.strip().lower()
+    if normalized_route not in ROUTING_MODES:
+        raise RequestValidationError(
+            "invalid_route",
+            "Supported route values are: auto, local, reasoning, heavy.",
+        )
 
 
 def _validate_model_field(model: JSONValue) -> None:

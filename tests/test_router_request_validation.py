@@ -3,7 +3,6 @@ from __future__ import annotations
 import unittest
 
 from router.app import RequestValidationError, validate_chat_request_payload
-from router.policies import RoutingPolicyError
 
 
 def build_payload(**overrides: object) -> dict[str, object]:
@@ -87,8 +86,8 @@ class RouterRequestValidationTests(unittest.TestCase):
 
         self.assertEqual(exc_info.exception.payload["error"]["type"], "invalid_messages")
 
-    def test_invalid_route_keeps_policy_error_shape(self) -> None:
-        with self.assertRaises(RoutingPolicyError) as exc_info:
+    def test_invalid_route_is_rejected_by_request_validator(self) -> None:
+        with self.assertRaises(RequestValidationError) as exc_info:
             validate_chat_request_payload(build_payload(route="cloud"))
 
         self.assertEqual(exc_info.exception.payload["error"]["type"], "invalid_route")
