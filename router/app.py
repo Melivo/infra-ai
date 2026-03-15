@@ -33,8 +33,15 @@ CAPABILITIES_SCHEMA_VERSION = "1"
 ROUTER_VERSION = "0.1.0"
 
 
+class ConfigValidationError(RuntimeError):
+    def __init__(self, errors: list[str]) -> None:
+        self.errors = tuple(errors)
+        super().__init__("invalid router configuration:\n- " + "\n- ".join(self.errors))
+
+
 class RouterApplication:
     def __init__(self, config: RouterConfig) -> None:
+        validate_config(config)
         self.config = config
         self.providers: dict[str, Provider] = {
             "local_vllm": LocalVLLMProvider(
@@ -418,6 +425,62 @@ def _build_frontend_contract_capabilities() -> JSONValue:
     }
 
 
+def validate_config(config: RouterConfig) -> None:
+    errors: list[str] = []
+
+    if _is_blank(config.host):
+        errors.append("INFRA_AI_ROUTER_HOST must not be empty.")
+    if not 1 <= config.port <= 65535:
+        errors.append("INFRA_AI_ROUTER_PORT must be between 1 and 65535.")
+    if config.request_timeout_s <= 0:
+        errors.append("INFRA_AI_REQUEST_TIMEOUT_S must be greater than 0.")
+
+    if _is_blank(config.local_vllm_base_url):
+        errors.append("INFRA_AI_LOCAL_VLLM_BASE_URL must not be empty.")
+    if _is_blank(config.local_vllm_default_model):
+        errors.append("INFRA_AI_LOCAL_VLLM_DEFAULT_MODEL must not be empty.")
+
+    if config.enable_gemini_fallback:
+        _require_non_empty(errors, "INFRA_AI_GEMINI_BASE_URL", config.gemini_base_url)
+        _require_non_empty(errors, "GEMINI_API_KEY", config.gemini_api_key)
+        _require_non_empty(errors, "INFRA_AI_GEMINI_DEFAULT_MODEL", config.gemini_default_model)
+        if config.gemini_default_model == "gemini-model-id-here":
+            errors.append(
+                "INFRA_AI_GEMINI_DEFAULT_MODEL must be set to a real Gemini model before "
+                "enabling the reasoning route."
+            )
+
+    if config.enable_openai_fallback:
+        _require_non_empty(
+            errors,
+            "INFRA_AI_OPENAI_RESPONSES_BASE_URL",
+            config.openai_responses_base_url,
+        )
+        _require_non_empty(
+            errors,
+            "INFRA_AI_OPENAI_MODELS_BASE_URL",
+            config.openai_models_base_url,
+        )
+        _require_non_empty(errors, "OPENAI_API_KEY", config.openai_api_key)
+        _require_non_empty(
+            errors,
+            "INFRA_AI_OPENAI_REASONING_MODEL",
+            config.openai_reasoning_model,
+        )
+
+    if errors:
+        raise ConfigValidationError(errors)
+
+
+def _require_non_empty(errors: list[str], env_name: str, value: str | None) -> None:
+    if _is_blank(value):
+        errors.append(f"{env_name} must not be empty when its provider is enabled.")
+
+
+def _is_blank(value: str | None) -> bool:
+    return value is None or not value.strip()
+
+
 def _iter_upstream_chunks(upstream) -> Iterator[bytes]:
     with upstream:
         while True:
@@ -500,7 +563,10 @@ def _error_payload(message: str) -> JSONValue:
 
 def main() -> None:
     config = load_config()
-    app = RouterApplication(config)
+    try:
+        app = RouterApplication(config)
+    except ConfigValidationError as exc:
+        raise SystemExit(str(exc)) from exc
     server = RouterHTTPServer((config.host, config.port), RouterRequestHandler, app)
     print(
         "infra-ai router listening on "

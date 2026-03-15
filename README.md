@@ -85,6 +85,8 @@ Alle Befehle unten werden vom Repository-Root ausgefuehrt.
 2. Optional: Lege lokale Konfigurationsdateien aus den Beispielen an, zum Beispiel `config/router.local.env` und `config/providers.local.env`.
 3. Trage nur in lokalen, nicht versionierten Dateien echte API-Keys ein.
 
+Wenn du Cloud-Provider aktivierst, validiert der Router die notwendige Konfiguration beim Start fail-fast und beendet sich mit einer klaren Fehlermeldung, statt erst beim ersten Request halb-konfiguriert zu scheitern.
+
 ## vLLM starten
 
 ```bash
