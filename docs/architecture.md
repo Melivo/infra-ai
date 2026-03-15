@@ -1,0 +1,79 @@
+# Architecture
+
+## System Structure
+
+`infra-ai` is organized around a central router platform.
+
+```text
+Frontend
+  -> infra-ai Router
+    -> Provider Layer
+      -> local vLLM
+      -> Gemini API
+      -> OpenAI API
+```
+
+The router is the stable platform boundary.
+
+## Layer Responsibilities
+
+### Frontends
+
+Frontends are thin clients.
+
+- They talk only to the router.
+- They do not contain model logic.
+- They do not contain provider logic.
+- They do not implement routing policy.
+
+Current frontend:
+
+- terminal CLI as reference frontend
+
+Planned future frontends remain outside the router core.
+
+### Router
+
+The router controls:
+
+- request validation
+- routing modes and policies
+- provider selection
+- provider error normalization
+- timeout policy
+- streaming behavior at the platform boundary
+- public capabilities and model discovery endpoints
+
+The router is frontend-agnostic.
+
+### Provider Layer
+
+Providers are replaceable backend modules behind the router.
+
+- `local_vllm`
+- `gemini_fallback`
+- `openai_responses`
+
+Providers do not define the public platform contract on their own. The router does.
+
+## Current Platform Guarantees
+
+- strict request validation for `POST /v1/chat/completions`
+- explicit routing behavior via `auto`, `local`, `reasoning`, and `heavy`
+- no silent cloud fallback
+- normalized error contract for frontend clients
+- router-level provider timeouts
+- minimal structured router logging
+- frontend-agnostic router boundary
+- provider modules behind a stable router API
+- `GET /v1/models` currently exposed as a local compatibility path, not a multi-provider discovery layer
+
+## Not Yet Implemented
+
+- tool calling
+- agents
+- MCP integration
+- RAG or project context
+- workflow automation
+- IDE integration
+- browser companion

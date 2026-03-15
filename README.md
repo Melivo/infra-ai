@@ -131,6 +131,19 @@ Der aktuelle Router-Vertrag ist bewusst klein, aber hart:
 - `GET /v1/models` bleibt vorerst ein lokaler Kompatibilitaetspfad und ist noch kein aggregiertes Multi-Provider-Discovery-API.
 - Bewusst noch nicht enthalten sind Tool-Use, Agents, MCP, RAG und intelligente Autowahl zwischen Providern.
 
+## Repository Layout
+
+Dieses Repository enthaelt die oeffentliche Infrastruktur von `infra-ai`:
+
+- Router
+- Provider-Abstraktionen
+- CLI
+- Beispielkonfigurationen
+- Dokumentation
+- generische Skripte und Tests
+
+Private Inhalte wie Secrets, produktive Prompts, Kundendaten oder private Wissensdaten gehoeren in separate private Repositories. Details dazu stehen in [docs/repositories.md](/home/visimeos/Projects/infra-ai/docs/repositories.md).
+
 ## Router-Introspection
 
 `GET /v1/router/capabilities` ist ein read-only Introspection-Endpunkt fuer CLI und spaetere Frontends.
