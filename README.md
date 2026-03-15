@@ -173,6 +173,21 @@ Wenn `reasoning` oder `heavy` angefordert werden und der jeweilige Provider nich
 - OpenAI Tools: `INFRA_AI_OPENAI_TOOLS_MODEL`
 - OpenAI Realtime: `INFRA_AI_OPENAI_REALTIME_MODEL`
 
+## Request-Contract
+
+Der Router validiert `POST /v1/chat/completions` bewusst frueh und strikt:
+
+- `messages` ist verpflichtend und muss ein nicht-leeres JSON-Array sein.
+- Jede Message braucht `role` und `content`.
+- Aktuell sind nur `system`, `user` und `assistant` als Rollen erlaubt.
+- Aktuell ist nur Text-Content erlaubt: entweder als String oder als Liste aus Text-Teilen.
+- `stream` muss, falls gesetzt, ein Boolean sein.
+- `model` muss, falls gesetzt, ein nicht-leerer String sein. Fuer Router-Defaults bleibt `model=auto` erlaubt.
+- `provider_slot` ist ein internes Router-Feld und darf nicht von Clients gesendet werden.
+
+Semantisch kaputte oder mehrdeutige Requests werden mit konsistenten `4xx`-Antworten im Format
+`{"error":{"type":"...","message":"..."}}` abgelehnt, statt still normalisiert oder implizit umgedeutet zu werden.
+
 ## Minimale CLI
 
 Die CLI ist ein bewusst duennes Referenz-Frontend und enthaelt keine Provider- oder Agentenlogik.

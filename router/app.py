@@ -12,6 +12,7 @@ from router.policies import (
     RoutingPolicyError,
     provider_for_route,
     provider_slot_for_route,
+    resolve_routing_mode,
     route_enabled,
     route_streaming_supported,
     select_provider,
@@ -31,12 +32,21 @@ from router.schemas import JSONValue, RouterConfig, ROUTING_MODES, StreamingResp
 
 CAPABILITIES_SCHEMA_VERSION = "1"
 ROUTER_VERSION = "0.1.0"
+ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant"}
+MODEL_AUTO_ALIASES = {"auto", "default", "router-default"}
 
 
 class ConfigValidationError(RuntimeError):
     def __init__(self, errors: list[str]) -> None:
         self.errors = tuple(errors)
         super().__init__("invalid router configuration:\n- " + "\n- ".join(self.errors))
+
+
+class RequestValidationError(RuntimeError):
+    def __init__(self, error_type: str, message: str) -> None:
+        super().__init__(message)
+        self.status_code = HTTPStatus.BAD_REQUEST
+        self.payload = _error_payload(error_type, message)
 
 
 class RouterApplication:
@@ -156,6 +166,7 @@ class RouterApplication:
         return self._run_provider_action(selection.provider_name, lambda provider: provider.list_models())
 
     def chat_completions(self, payload: dict[str, JSONValue]) -> tuple[int, JSONValue]:
+        validate_chat_request_payload(payload)
         try:
             selection = select_provider(
                 path="/v1/chat/completions",
@@ -172,6 +183,7 @@ class RouterApplication:
         )
 
     def stream_chat_completions(self, payload: dict[str, JSONValue]) -> StreamingResponse:
+        validate_chat_request_payload(payload)
         selection = select_provider(
             path="/v1/chat/completions",
             payload=payload,
@@ -196,7 +208,7 @@ class RouterApplication:
         try:
             return action(provider)
         except ProviderError as exc:
-            return exc.status_code, exc.payload or _error_payload(str(exc))
+            return exc.status_code, exc.payload or _error_payload("provider_error", str(exc))
 
 
 class RouterHTTPServer(ThreadingHTTPServer):
@@ -224,19 +236,28 @@ class RouterRequestHandler(BaseHTTPRequestHandler):
 
         self._write_response(
             HTTPStatus.NOT_FOUND,
-            _error_payload(f"unsupported path: {self.path}"),
+            _error_payload("unsupported_path", f"unsupported path: {self.path}"),
         )
 
     def do_POST(self) -> None:
         if self.path != "/v1/chat/completions":
             self._write_response(
                 HTTPStatus.NOT_FOUND,
-                _error_payload(f"unsupported path: {self.path}"),
+                _error_payload("unsupported_path", f"unsupported path: {self.path}"),
             )
             return
 
         payload = self._read_json_body()
         if payload is None:
+            return
+
+        try:
+            validate_chat_request_payload(payload)
+        except RoutingPolicyError as exc:
+            self._write_response(exc.status_code, exc.payload)
+            return
+        except RequestValidationError as exc:
+            self._write_response(exc.status_code, exc.payload)
             return
 
         if payload.get("stream") is True:
@@ -258,14 +279,14 @@ class RouterRequestHandler(BaseHTTPRequestHandler):
         except json.JSONDecodeError as exc:
             self._write_response(
                 HTTPStatus.BAD_REQUEST,
-                _error_payload(f"invalid JSON body: {exc.msg}"),
+                _error_payload("invalid_json", f"invalid JSON body: {exc.msg}"),
             )
             return None
 
         if not isinstance(payload, dict):
             self._write_response(
                 HTTPStatus.BAD_REQUEST,
-                _error_payload("request body must be a JSON object"),
+                _error_payload("invalid_request", "request body must be a JSON object"),
             )
             return None
 
@@ -285,8 +306,14 @@ class RouterRequestHandler(BaseHTTPRequestHandler):
         except RoutingPolicyError as exc:
             self._write_response(exc.status_code, exc.payload)
             return
+        except RequestValidationError as exc:
+            self._write_response(exc.status_code, exc.payload)
+            return
         except ProviderError as exc:
-            self._write_response(exc.status_code, exc.payload or _error_payload(str(exc)))
+            self._write_response(
+                exc.status_code,
+                exc.payload or _error_payload("provider_error", str(exc)),
+            )
             return
 
         self.send_response(stream.status_code)
@@ -315,6 +342,145 @@ def _with_provider_slot(
     payload_with_slot = dict(payload)
     payload_with_slot["provider_slot"] = provider_slot
     return payload_with_slot
+
+
+def validate_chat_request_payload(payload: dict[str, JSONValue]) -> None:
+    resolve_routing_mode(payload)
+
+    if "provider_slot" in payload:
+        raise RequestValidationError(
+            "invalid_request_field",
+            "provider_slot is reserved for internal router use and must not be sent by clients.",
+        )
+
+    if "stream" in payload and not isinstance(payload["stream"], bool):
+        raise RequestValidationError(
+            "invalid_stream",
+            "The stream field must be a boolean when provided.",
+        )
+
+    if "model" in payload:
+        _validate_model_field(payload["model"])
+
+    _validate_messages(payload.get("messages"))
+
+
+def _validate_model_field(model: JSONValue) -> None:
+    if not isinstance(model, str):
+        raise RequestValidationError(
+            "invalid_model",
+            "The model field must be a string when provided.",
+        )
+
+    normalized_model = model.strip()
+    if not normalized_model:
+        raise RequestValidationError(
+            "invalid_model",
+            "The model field must not be blank. Omit it or use auto for router defaults.",
+        )
+
+    if normalized_model.lower() in MODEL_AUTO_ALIASES:
+        return
+
+
+def _validate_messages(messages: JSONValue) -> None:
+    if not isinstance(messages, list):
+        raise RequestValidationError(
+            "invalid_messages",
+            "The messages field is required and must be a JSON array.",
+        )
+
+    if not messages:
+        raise RequestValidationError(
+            "invalid_messages",
+            "The messages field must contain at least one message.",
+        )
+
+    has_non_system_message = False
+    for message in messages:
+        if not isinstance(message, dict):
+            raise RequestValidationError(
+                "invalid_message",
+                "Each message must be a JSON object with role and content.",
+            )
+
+        role = message.get("role")
+        if not isinstance(role, str):
+            raise RequestValidationError(
+                "invalid_role",
+                "Each message must include a string role.",
+            )
+
+        normalized_role = role.strip().lower()
+        if normalized_role not in ALLOWED_MESSAGE_ROLES:
+            raise RequestValidationError(
+                "unsupported_role",
+                "Only system, user and assistant roles are supported right now.",
+            )
+
+        if "content" not in message:
+            raise RequestValidationError(
+                "invalid_message",
+                "Each message must include a content field.",
+            )
+
+        _validate_message_content(message["content"])
+        if normalized_role != "system":
+            has_non_system_message = True
+
+    if not has_non_system_message:
+        raise RequestValidationError(
+            "invalid_messages",
+            "Add at least one user or assistant message.",
+        )
+
+
+def _validate_message_content(content: JSONValue) -> None:
+    if isinstance(content, str):
+        if content.strip():
+            return
+        raise RequestValidationError(
+            "invalid_content",
+            "Message content must not be blank.",
+        )
+
+    if isinstance(content, list):
+        saw_text = False
+        for item in content:
+            if isinstance(item, str):
+                if item.strip():
+                    saw_text = True
+                    continue
+                raise RequestValidationError(
+                    "invalid_content",
+                    "Text content parts must not be blank.",
+                )
+
+            if (
+                isinstance(item, dict)
+                and item.get("type") == "text"
+                and isinstance(item.get("text"), str)
+            ):
+                if item["text"].strip():
+                    saw_text = True
+                    continue
+                raise RequestValidationError(
+                    "invalid_content",
+                    "Text content parts must not be blank.",
+                )
+
+            raise RequestValidationError(
+                "unsupported_content",
+                "Only plain text content is supported right now.",
+            )
+
+        if saw_text:
+            return
+
+    raise RequestValidationError(
+        "unsupported_content",
+        "Only plain text content is supported right now.",
+    )
 
 
 def _build_openai_capabilities(config: RouterConfig) -> JSONValue:
@@ -557,8 +723,13 @@ def load_config() -> RouterConfig:
     )
 
 
-def _error_payload(message: str) -> JSONValue:
-    return {"error": {"message": message}}
+def _error_payload(error_type: str, message: str) -> JSONValue:
+    return {
+        "error": {
+            "type": error_type,
+            "message": message,
+        }
+    }
 
 
 def main() -> None:
