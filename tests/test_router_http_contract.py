@@ -54,8 +54,10 @@ class StubProvider(Provider):
         self.name = name
         self.stream_supported = stream_supported
         self.last_payload: dict[str, JSONValue] | None = None
+        self.list_models_called = False
 
     def list_models(self) -> tuple[int, JSONValue]:
+        self.list_models_called = True
         return (
             200,
             {
@@ -210,6 +212,86 @@ class RouterHTTPContractTests(unittest.TestCase):
         }
         app.providers = providers
         return app, providers
+
+    def test_healthz_contract_is_stable(self) -> None:
+        app, _ = self.make_app(build_config())
+
+        status_code, response_headers, payload = perform_json_request(
+            app,
+            method="GET",
+            path="/healthz",
+        )
+
+        self.assertEqual(status_code, 200)
+        self.assertEqual(response_headers["content-type"], "application/json")
+        self.assertEqual(payload, {"status": "ok"})
+
+    def test_capabilities_contract_exposes_public_router_fields(self) -> None:
+        app, _ = self.make_app(
+            build_config(
+                enable_gemini_fallback=True,
+                gemini_api_key="test-key",
+                gemini_default_model="gemini-2.5-pro",
+            )
+        )
+
+        status_code, response_headers, payload = perform_json_request(
+            app,
+            method="GET",
+            path="/v1/router/capabilities",
+        )
+
+        self.assertEqual(status_code, 200)
+        self.assertEqual(response_headers["content-type"], "application/json")
+        self.assertEqual(payload["object"], "router.capabilities")
+        self.assertEqual(payload["schema_version"], "1")
+        self.assertIsInstance(payload["router_version"], str)
+        self.assertIsInstance(payload["available_routes"], dict)
+        self.assertIsInstance(payload["enabled_providers"], dict)
+        self.assertIsInstance(payload["streaming_support"], dict)
+        self.assertIsInstance(payload["default_models"], dict)
+        self.assertIsInstance(payload["frontend_contract"], dict)
+        self.assertIsInstance(payload["not_yet_supported"], list)
+
+        self.assertEqual(
+            payload["frontend_contract"]["shared_contract"]["chat_endpoint"],
+            "/v1/chat/completions",
+        )
+        self.assertEqual(
+            payload["frontend_contract"]["shared_contract"]["capabilities_endpoint"],
+            "/v1/router/capabilities",
+        )
+        self.assertEqual(payload["available_routes"]["local"]["enabled"], True)
+        self.assertEqual(payload["available_routes"]["reasoning"]["enabled"], True)
+        self.assertEqual(payload["available_routes"]["heavy"]["enabled"], False)
+        self.assertEqual(payload["available_routes"]["local"]["streaming"], True)
+        self.assertEqual(payload["available_routes"]["reasoning"]["streaming"], False)
+        self.assertIn("local", payload["streaming_support"]["routes"])
+        self.assertNotIn("reasoning", payload["streaming_support"]["routes"])
+
+    def test_models_contract_currently_routes_to_local_provider(self) -> None:
+        app, providers = self.make_app(
+            build_config(
+                enable_openai_fallback=True,
+                openai_api_key="test-key",
+                openai_reasoning_model="gpt-5.2",
+            )
+        )
+
+        status_code, response_headers, payload = perform_json_request(
+            app,
+            method="GET",
+            path="/v1/models",
+        )
+
+        self.assertEqual(status_code, 200)
+        self.assertEqual(response_headers["content-type"], "application/json")
+        self.assertEqual(payload["object"], "list")
+        self.assertIsInstance(payload["data"], list)
+        self.assertEqual(payload["data"][0]["id"], "local_vllm-model")
+        self.assertEqual(providers["local_vllm"].list_models_called, True)
+        self.assertEqual(providers["gemini_fallback"].list_models_called, False)
+        self.assertEqual(providers["openai_responses"].list_models_called, False)
 
     def test_http_chat_routes_map_to_expected_providers(self) -> None:
         app, providers = self.make_app(

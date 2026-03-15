@@ -116,6 +116,8 @@ Aktuell exponiert er:
 - `GET /v1/models`
 - `POST /v1/chat/completions`
 
+`GET /v1/models` ist aktuell ein kleiner Kompatibilitaetspfad fuer lokale Modell-Discovery ueber den Router und wird derzeit an `local_vllm` gebunden. Der Endpunkt ist damit noch kein aggregiertes Multi-Provider-Discovery-API des gesamten Routers.
+
 ## Router-Introspection
 
 `GET /v1/router/capabilities` ist ein read-only Introspection-Endpunkt fuer CLI und spaetere Frontends.
