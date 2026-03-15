@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from router.providers.base import Provider, request_json, with_resolved_model
+from urllib.response import addinfourl
+
+from router.providers.base import Provider, request_json, request_stream, with_resolved_model
 from router.schemas import JSONValue
 
 
@@ -17,6 +19,17 @@ class LocalVLLMProvider(Provider):
 
     def chat_completions(self, payload: dict[str, JSONValue]) -> tuple[int, JSONValue]:
         return self._request("POST", "/chat/completions", payload)
+
+    def stream_chat_completions(self, payload: dict[str, JSONValue]) -> addinfourl:
+        request_payload = with_resolved_model(payload, default_model=self.default_model)
+        return request_stream(
+            method="POST",
+            url=f"{self.base_url}/chat/completions",
+            timeout_s=self.timeout_s,
+            provider_name="local_vllm",
+            payload=request_payload,
+            headers={"Accept": "text/event-stream"},
+        )
 
     def _request(
         self,

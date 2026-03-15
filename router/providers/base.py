@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
+from urllib.response import addinfourl
 from urllib import error, request
 
 from router.schemas import JSONValue
 
 AUTO_MODEL_ALIASES = {"", "auto", "default", "router-default"}
+ROUTER_CONTROL_FIELDS = {"route"}
 
 
 class ProviderError(RuntimeError):
@@ -34,6 +36,17 @@ class Provider(ABC):
     @abstractmethod
     def chat_completions(self, payload: dict[str, JSONValue]) -> tuple[int, JSONValue]:
         raise NotImplementedError
+
+    def stream_chat_completions(self, payload: dict[str, JSONValue]) -> addinfourl:
+        del payload
+        raise ProviderError(
+            f"{self.name} does not support streaming via the router yet.",
+            status_code=501,
+            payload=_error_payload(
+                "streaming_not_supported",
+                f"Streaming is not available for {self.name} via the router yet.",
+            ),
+        )
 
 
 def request_json(
@@ -79,6 +92,47 @@ def request_json(
         ) from exc
 
 
+def request_stream(
+    *,
+    method: str,
+    url: str,
+    timeout_s: float,
+    provider_name: str,
+    payload: dict[str, JSONValue] | None = None,
+    headers: dict[str, str] | None = None,
+) -> addinfourl:
+    request_headers = {"Content-Type": "application/json"}
+    if headers:
+        request_headers.update(headers)
+
+    data = None
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+
+    req = request.Request(url, data=data, headers=request_headers, method=method)
+
+    try:
+        return request.urlopen(req, timeout=timeout_s)
+    except error.HTTPError as exc:
+        body = _decode_json(exc.read(), exc.reason)
+        raise ProviderError(
+            f"{provider_name} returned status {exc.code}",
+            status_code=exc.code,
+            payload=body,
+            should_fallback=exc.code >= 500 or exc.code == 429,
+        ) from exc
+    except (error.URLError, OSError) as exc:
+        reason = getattr(exc, "reason", str(exc))
+        raise ProviderError(
+            f"{provider_name} request failed: {reason}",
+            payload=_error_payload(
+                f"{provider_name}_unavailable",
+                str(reason),
+            ),
+            should_fallback=True,
+        ) from exc
+
+
 def resolve_model(payload: dict[str, JSONValue], default_model: str | None) -> str | None:
     model = payload.get("model")
     if isinstance(model, str) and model.strip().lower() not in AUTO_MODEL_ALIASES:
@@ -91,13 +145,21 @@ def with_resolved_model(
     *,
     default_model: str | None,
 ) -> dict[str, JSONValue]:
+    outgoing_payload = without_router_fields(payload)
     resolved_model = resolve_model(payload, default_model)
     if not resolved_model:
-        return dict(payload)
+        return outgoing_payload
 
-    outgoing_payload = dict(payload)
     outgoing_payload["model"] = resolved_model
     return outgoing_payload
+
+
+def without_router_fields(payload: dict[str, JSONValue]) -> dict[str, JSONValue]:
+    return {
+        key: value
+        for key, value in payload.items()
+        if key not in ROUTER_CONTROL_FIELDS
+    }
 
 
 def _decode_json(raw: bytes, fallback_message: str) -> JSONValue:

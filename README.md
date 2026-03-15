@@ -59,7 +59,8 @@ Wichtige Leitplanken:
 - Provider-Logik bleibt im Backend.
 - `vLLM` bleibt lokal und zustandsarm.
 - API-Provider sind optional konfigurierbar.
-- Streaming ist fuer die Router-Frontend-Schiene mitgedacht, aber in diesem Commit noch nicht implementiert.
+- Keine stillen Cloud-Fallbacks: der Request bestimmt den Routing-Modus explizit.
+- Streaming ist minimal ueber den Router verfuegbar, aktuell nur fuer den lokalen Pfad.
 
 ## Runtime-Daten
 
@@ -105,7 +106,18 @@ Aktuell exponiert er:
 - `GET /v1/models`
 - `POST /v1/chat/completions`
 
-`POST /v1/chat/completions` nutzt fuer `model=auto` die Backend-Defaults pro Provider:
+## Routing-Vertrag
+
+`POST /v1/chat/completions` akzeptiert ein router-spezifisches Top-Level-Feld `route`:
+
+- `auto`: deterministisch wie `local`, ohne Cloud-Fallback
+- `local`: lokaler `vLLM`-Provider
+- `reasoning`: `Gemini`-Provider, nur wenn aktiviert
+- `heavy`: `OpenAI`-Provider, nur wenn aktiviert
+
+Wenn `reasoning` oder `heavy` angefordert werden und der jeweilige Provider nicht aktiviert ist, antwortet der Router mit einem expliziten Fehler statt still auf einen anderen Provider zu wechseln.
+
+`model=auto` nutzt die Backend-Defaults pro Provider:
 
 - lokal: `INFRA_AI_LOCAL_VLLM_DEFAULT_MODEL`
 - Gemini: `INFRA_AI_GEMINI_DEFAULT_MODEL`
@@ -116,16 +128,27 @@ Aktuell exponiert er:
 Die CLI ist ein bewusst duennes Frontend und enthaelt keine Provider- oder Agentenlogik.
 
 ```bash
-python3 -m cli.main "Fasse in einem Satz zusammen, wofuer infra-ai gebaut ist."
+python3 -m cli.main --route local "Fasse in einem Satz zusammen, wofuer infra-ai gebaut ist."
 ```
 
 Optional mit stdin:
 
 ```bash
-printf 'Nenne die aktuelle Router-Architektur in einem Satz.' | python3 -m cli.main
+printf 'Nenne die aktuelle Router-Architektur in einem Satz.' | python3 -m cli.main --route auto
 ```
 
-Die CLI spricht standardmaessig mit `http://127.0.0.1:8010/v1` und sendet `model=auto`, damit die Modelwahl backend-seitig bleibt.
+Minimales lokales Streaming:
+
+```bash
+python3 -m cli.main --route local --stream "Erklaere in zwei Saetzen, was infra-ai ist."
+```
+
+Die CLI spricht standardmaessig mit `http://127.0.0.1:8010/v1`, sendet `model=auto` und reicht `route` unveraendert an den Router durch.
+
+Aktuelle Streaming-Grenze:
+
+- `--stream` ist fuer `local` und damit auch fuer `auto` gedacht, weil `auto` derzeit deterministisch lokal aufloest.
+- Fuer `reasoning` und `heavy` liefert der Router einen klaren Fehler statt Fake-Streaming.
 
 ## Smoke-Checks
 
@@ -139,6 +162,12 @@ Einfacher Chat gegen den Router:
 
 ```bash
 python3 scripts/smoke_chat.py
+```
+
+Mit explizitem Routing-Modus:
+
+```bash
+INFRA_AI_ROUTER_ROUTE=reasoning python3 scripts/smoke_chat.py
 ```
 
 Optional bleibt auch der OpenAI-SDK-Testclient verfuegbar:
@@ -159,6 +188,7 @@ Public repo-tauglich:
 - CLI-Code
 - Beispielkonfigurationen
 - README und Smoke-Skripte
+- der oeffentliche Routing-Vertrag mit `route=auto|local|reasoning|heavy`
 
 Privat bleiben muessen:
 

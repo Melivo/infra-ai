@@ -2,17 +2,18 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from socket import timeout as SocketTimeout
 from typing import cast
 
-from router.policies import select_provider
+from router.policies import RoutingPolicyError, select_provider
 from router.providers.base import Provider, ProviderError
 from router.providers.gemini_fallback import GeminiFallbackProvider
 from router.providers.local_vllm import LocalVLLMProvider
 from router.providers.openai_fallback import OpenAIFallbackProvider
-from router.schemas import JSONValue, RouterConfig
+from router.schemas import JSONValue, RouterConfig, StreamingResponse
 
 
 class RouterApplication:
@@ -42,54 +43,52 @@ class RouterApplication:
         return HTTPStatus.OK, {"status": "ok"}
 
     def list_models(self) -> tuple[int, JSONValue]:
-        selection = select_provider(path="/v1/models", payload=None, config=self.config)
-        return self._run_with_optional_fallback(selection, lambda provider: provider.list_models())
+        try:
+            selection = select_provider(path="/v1/models", payload=None, config=self.config)
+        except RoutingPolicyError as exc:
+            return exc.status_code, exc.payload
+        return self._run_provider_action(selection.provider_name, lambda provider: provider.list_models())
 
     def chat_completions(self, payload: dict[str, JSONValue]) -> tuple[int, JSONValue]:
-        if payload.get("stream") is True:
-            return (
-                HTTPStatus.NOT_IMPLEMENTED,
-                {
-                    "error": {
-                        "type": "streaming_not_implemented",
-                        "message": (
-                            "Streaming passthrough is planned for the router frontend path "
-                            "but is not implemented in this commit."
-                        ),
-                    }
-                },
+        try:
+            selection = select_provider(
+                path="/v1/chat/completions",
+                payload=payload,
+                config=self.config,
             )
+        except RoutingPolicyError as exc:
+            return exc.status_code, exc.payload
 
+        return self._run_provider_action(
+            selection.provider_name,
+            lambda provider: provider.chat_completions(payload),
+        )
+
+    def stream_chat_completions(self, payload: dict[str, JSONValue]) -> StreamingResponse:
         selection = select_provider(
             path="/v1/chat/completions",
             payload=payload,
             config=self.config,
         )
-        return self._run_with_optional_fallback(
-            selection,
-            lambda provider: provider.chat_completions(payload),
+        provider = self.providers[selection.provider_name]
+        upstream = provider.stream_chat_completions(payload)
+        content_type = upstream.headers.get_content_type() or "text/event-stream"
+        return StreamingResponse(
+            status_code=upstream.getcode(),
+            content_type=content_type,
+            chunks=_iter_upstream_chunks(upstream),
         )
 
-    def _run_with_optional_fallback(
+    def _run_provider_action(
         self,
-        selection,
+        provider_name: str,
         action: Callable[[Provider], tuple[int, JSONValue]],
     ) -> tuple[int, JSONValue]:
-        last_error: ProviderError | None = None
-
-        for provider_name in selection.candidates:
-            provider = self.providers[provider_name]
-            try:
-                return action(provider)
-            except ProviderError as exc:
-                last_error = exc
-                if not exc.should_fallback:
-                    break
-
-        if last_error is None:
-            return HTTPStatus.INTERNAL_SERVER_ERROR, _error_payload("no provider candidates")
-
-        return last_error.status_code, last_error.payload or _error_payload(str(last_error))
+        provider = self.providers[provider_name]
+        try:
+            return action(provider)
+        except ProviderError as exc:
+            return exc.status_code, exc.payload or _error_payload(str(exc))
 
 
 class RouterHTTPServer(ThreadingHTTPServer):
@@ -99,6 +98,7 @@ class RouterHTTPServer(ThreadingHTTPServer):
 
 
 class RouterRequestHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
     server: RouterHTTPServer
 
     def do_GET(self) -> None:
@@ -125,6 +125,10 @@ class RouterRequestHandler(BaseHTTPRequestHandler):
 
         payload = self._read_json_body()
         if payload is None:
+            return
+
+        if payload.get("stream") is True:
+            self._write_stream_response(payload)
             return
 
         self._write_response(*self.server.app.chat_completions(payload))
@@ -162,6 +166,40 @@ class RouterRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(encoded)))
         self.end_headers()
         self.wfile.write(encoded)
+
+    def _write_stream_response(self, payload: dict[str, JSONValue]) -> None:
+        try:
+            stream = self.server.app.stream_chat_completions(payload)
+        except RoutingPolicyError as exc:
+            self._write_response(exc.status_code, exc.payload)
+            return
+        except ProviderError as exc:
+            self._write_response(exc.status_code, exc.payload or _error_payload(str(exc)))
+            return
+
+        self.send_response(stream.status_code)
+        self.send_header("Content-Type", stream.content_type)
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+
+        try:
+            for chunk in stream.chunks:
+                if not chunk:
+                    continue
+                self.wfile.write(chunk)
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, SocketTimeout):
+            return
+
+
+def _iter_upstream_chunks(upstream) -> Iterator[bytes]:
+    with upstream:
+        while True:
+            chunk = upstream.read(1024)
+            if not chunk:
+                return
+            yield chunk
 
 
 def load_config() -> RouterConfig:
@@ -212,8 +250,8 @@ def main() -> None:
     server = RouterHTTPServer((config.host, config.port), RouterRequestHandler, app)
     print(
         "infra-ai router listening on "
-        f"http://{config.host}:{config.port} with provider chain "
-        f"local_vllm -> gemini_fallback -> openai_fallback"
+        f"http://{config.host}:{config.port} with routes "
+        "auto|local -> local_vllm, reasoning -> gemini_fallback, heavy -> openai_fallback"
     )
     server.serve_forever()
 

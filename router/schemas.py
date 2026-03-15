@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import TypeAlias
+from typing import Literal, TypeAlias
 
 JSONPrimitive: TypeAlias = None | bool | int | float | str
 JSONValue: TypeAlias = JSONPrimitive | list["JSONValue"] | dict[str, "JSONValue"]
+RoutingMode: TypeAlias = Literal["auto", "local", "reasoning", "heavy"]
 
 
 @dataclass(frozen=True)
@@ -26,4 +28,12 @@ class RouterConfig:
 
 @dataclass(frozen=True)
 class ProviderSelection:
-    candidates: tuple[str, ...]
+    routing_mode: RoutingMode
+    provider_name: str
+
+
+@dataclass
+class StreamingResponse:
+    status_code: int
+    content_type: str
+    chunks: Iterator[bytes]
