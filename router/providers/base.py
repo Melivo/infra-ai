@@ -6,6 +6,8 @@ from urllib import error, request
 
 from router.schemas import JSONValue
 
+AUTO_MODEL_ALIASES = {"", "auto", "default", "router-default"}
+
 
 class ProviderError(RuntimeError):
     def __init__(
@@ -14,10 +16,12 @@ class ProviderError(RuntimeError):
         *,
         status_code: int = 502,
         payload: JSONValue | None = None,
+        should_fallback: bool = False,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.payload = payload
+        self.should_fallback = should_fallback
 
 
 class Provider(ABC):
@@ -61,6 +65,7 @@ def request_json(
             f"{provider_name} returned status {exc.code}",
             status_code=exc.code,
             payload=body,
+            should_fallback=exc.code >= 500 or exc.code == 429,
         ) from exc
     except (error.URLError, OSError) as exc:
         reason = getattr(exc, "reason", str(exc))
@@ -70,7 +75,29 @@ def request_json(
                 f"{provider_name}_unavailable",
                 str(reason),
             ),
+            should_fallback=True,
         ) from exc
+
+
+def resolve_model(payload: dict[str, JSONValue], default_model: str | None) -> str | None:
+    model = payload.get("model")
+    if isinstance(model, str) and model.strip().lower() not in AUTO_MODEL_ALIASES:
+        return model.strip()
+    return default_model
+
+
+def with_resolved_model(
+    payload: dict[str, JSONValue],
+    *,
+    default_model: str | None,
+) -> dict[str, JSONValue]:
+    resolved_model = resolve_model(payload, default_model)
+    if not resolved_model:
+        return dict(payload)
+
+    outgoing_payload = dict(payload)
+    outgoing_payload["model"] = resolved_model
+    return outgoing_payload
 
 
 def _decode_json(raw: bytes, fallback_message: str) -> JSONValue:

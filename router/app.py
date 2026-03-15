@@ -9,6 +9,7 @@ from typing import cast
 
 from router.policies import select_provider
 from router.providers.base import Provider, ProviderError
+from router.providers.gemini_fallback import GeminiFallbackProvider
 from router.providers.local_vllm import LocalVLLMProvider
 from router.providers.openai_fallback import OpenAIFallbackProvider
 from router.schemas import JSONValue, RouterConfig
@@ -20,11 +21,19 @@ class RouterApplication:
         self.providers: dict[str, Provider] = {
             "local_vllm": LocalVLLMProvider(
                 base_url=config.local_vllm_base_url,
+                default_model=config.local_vllm_default_model,
+                timeout_s=config.request_timeout_s,
+            ),
+            "gemini_fallback": GeminiFallbackProvider(
+                base_url=config.gemini_base_url,
+                api_key=config.gemini_api_key,
+                default_model=config.gemini_default_model,
                 timeout_s=config.request_timeout_s,
             ),
             "openai_fallback": OpenAIFallbackProvider(
                 base_url=config.openai_base_url,
                 api_key=config.openai_api_key,
+                default_model=config.openai_default_model,
                 timeout_s=config.request_timeout_s,
             ),
         }
@@ -37,6 +46,20 @@ class RouterApplication:
         return self._run_with_optional_fallback(selection, lambda provider: provider.list_models())
 
     def chat_completions(self, payload: dict[str, JSONValue]) -> tuple[int, JSONValue]:
+        if payload.get("stream") is True:
+            return (
+                HTTPStatus.NOT_IMPLEMENTED,
+                {
+                    "error": {
+                        "type": "streaming_not_implemented",
+                        "message": (
+                            "Streaming passthrough is planned for the router frontend path "
+                            "but is not implemented in this commit."
+                        ),
+                    }
+                },
+            )
+
         selection = select_provider(
             path="/v1/chat/completions",
             payload=payload,
@@ -52,17 +75,21 @@ class RouterApplication:
         selection,
         action: Callable[[Provider], tuple[int, JSONValue]],
     ) -> tuple[int, JSONValue]:
-        primary = self.providers[selection.primary]
-        try:
-            return action(primary)
-        except ProviderError as exc:
-            if selection.fallback and exc.status_code >= 500:
-                fallback = self.providers[selection.fallback]
-                try:
-                    return action(fallback)
-                except ProviderError:
-                    pass
-            return exc.status_code, exc.payload or _error_payload(str(exc))
+        last_error: ProviderError | None = None
+
+        for provider_name in selection.candidates:
+            provider = self.providers[provider_name]
+            try:
+                return action(provider)
+            except ProviderError as exc:
+                last_error = exc
+                if not exc.should_fallback:
+                    break
+
+        if last_error is None:
+            return HTTPStatus.INTERNAL_SERVER_ERROR, _error_payload("no provider candidates")
+
+        return last_error.status_code, last_error.payload or _error_payload(str(last_error))
 
 
 class RouterHTTPServer(ThreadingHTTPServer):
@@ -146,6 +173,21 @@ def load_config() -> RouterConfig:
             "INFRA_AI_LOCAL_VLLM_BASE_URL",
             "http://127.0.0.1:8000/v1",
         ),
+        local_vllm_default_model=os.environ.get(
+            "INFRA_AI_LOCAL_VLLM_DEFAULT_MODEL",
+            "Qwen/Qwen3-14B-AWQ",
+        ),
+        enable_gemini_fallback=os.environ.get(
+            "INFRA_AI_ENABLE_GEMINI_FALLBACK",
+            "0",
+        ).lower()
+        in {"1", "true", "yes"},
+        gemini_base_url=os.environ.get(
+            "INFRA_AI_GEMINI_BASE_URL",
+            "https://generativelanguage.googleapis.com/v1beta",
+        ),
+        gemini_api_key=os.environ.get("GEMINI_API_KEY"),
+        gemini_default_model=os.environ.get("INFRA_AI_GEMINI_DEFAULT_MODEL"),
         enable_openai_fallback=os.environ.get(
             "INFRA_AI_ENABLE_OPENAI_FALLBACK",
             "0",
@@ -156,6 +198,7 @@ def load_config() -> RouterConfig:
             "https://api.openai.com/v1",
         ),
         openai_api_key=os.environ.get("OPENAI_API_KEY"),
+        openai_default_model=os.environ.get("INFRA_AI_OPENAI_DEFAULT_MODEL"),
     )
 
 
@@ -169,7 +212,8 @@ def main() -> None:
     server = RouterHTTPServer((config.host, config.port), RouterRequestHandler, app)
     print(
         "infra-ai router listening on "
-        f"http://{config.host}:{config.port} and forwarding to {config.local_vllm_base_url}"
+        f"http://{config.host}:{config.port} with provider chain "
+        f"local_vllm -> gemini_fallback -> openai_fallback"
     )
     server.serve_forever()
 

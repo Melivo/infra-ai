@@ -11,8 +11,15 @@ def select_provider(
     payload: Mapping[str, object] | None,
     config: RouterConfig,
 ) -> ProviderSelection:
-    del path
     del payload
 
-    fallback = "openai_fallback" if config.enable_openai_fallback else None
-    return ProviderSelection(primary="local_vllm", fallback=fallback)
+    if path == "/v1/models":
+        return ProviderSelection(candidates=("local_vllm",))
+
+    candidates = ["local_vllm"]
+    if config.enable_gemini_fallback:
+        candidates.append("gemini_fallback")
+    if config.enable_openai_fallback:
+        candidates.append("openai_fallback")
+
+    return ProviderSelection(candidates=tuple(candidates))

@@ -13,12 +13,17 @@ class RouterConfig:
     port: int
     request_timeout_s: float
     local_vllm_base_url: str
+    local_vllm_default_model: str
+    enable_gemini_fallback: bool
+    gemini_base_url: str
+    gemini_api_key: str | None
+    gemini_default_model: str | None
     enable_openai_fallback: bool
     openai_base_url: str
     openai_api_key: str | None
+    openai_default_model: str | None
 
 
 @dataclass(frozen=True)
 class ProviderSelection:
-    primary: str
-    fallback: str | None = None
+    candidates: tuple[str, ...]
