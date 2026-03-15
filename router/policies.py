@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from router.schemas import JSONValue, ProviderSelection, RouterConfig, ROUTING_MODES, RoutingMode
+from router.schemas import (
+    JSONValue,
+    OpenAISlot,
+    ProviderSelection,
+    RouterConfig,
+    ROUTING_MODES,
+    RoutingMode,
+)
 
 
 class RoutingPolicyError(RuntimeError):
@@ -29,8 +36,13 @@ def select_provider(
 
     routing_mode = resolve_routing_mode(payload)
     provider_name = provider_for_route(routing_mode)
+    provider_slot = provider_slot_for_route(routing_mode)
     if route_enabled(routing_mode, config):
-        return ProviderSelection(routing_mode=routing_mode, provider_name=provider_name)
+        return ProviderSelection(
+            routing_mode=routing_mode,
+            provider_name=provider_name,
+            provider_slot=provider_slot,
+        )
 
     raise RoutingPolicyError(
         f"Route {routing_mode} is not enabled.",
@@ -84,7 +96,13 @@ def provider_for_route(route: RoutingMode) -> str:
         return "local_vllm"
     if route == "reasoning":
         return "gemini_fallback"
-    return "openai_fallback"
+    return "openai_responses"
+
+
+def provider_slot_for_route(route: RoutingMode) -> OpenAISlot | None:
+    if route == "heavy":
+        return "openai_reasoning"
+    return None
 
 
 def route_streaming_supported(route: RoutingMode) -> bool:

@@ -8,7 +8,7 @@ from urllib import error, request
 from router.schemas import JSONValue
 
 AUTO_MODEL_ALIASES = {"", "auto", "default", "router-default"}
-ROUTER_CONTROL_FIELDS = {"route"}
+ROUTER_CONTROL_FIELDS = {"route", "provider_slot"}
 
 
 class ProviderError(RuntimeError):

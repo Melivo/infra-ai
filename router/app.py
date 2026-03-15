@@ -11,6 +11,7 @@ from typing import cast
 from router.policies import (
     RoutingPolicyError,
     provider_for_route,
+    provider_slot_for_route,
     route_enabled,
     route_streaming_supported,
     select_provider,
@@ -18,7 +19,14 @@ from router.policies import (
 from router.providers.base import Provider, ProviderError
 from router.providers.gemini_fallback import GeminiFallbackProvider
 from router.providers.local_vllm import LocalVLLMProvider
-from router.providers.openai_fallback import OpenAIFallbackProvider
+from router.providers.openai import (
+    OPENAI_AGENT_SLOT,
+    OPENAI_REALTIME_SLOT,
+    OPENAI_RESPONSES_SLOTS,
+    OpenAIModelsClient,
+    OpenAIResponsesProvider,
+)
+from router.providers.openai.models import OPENAI_MODELS_SLOT
 from router.schemas import JSONValue, RouterConfig, ROUTING_MODES, StreamingResponse
 
 CAPABILITIES_SCHEMA_VERSION = "1"
@@ -40,13 +48,21 @@ class RouterApplication:
                 default_model=config.gemini_default_model,
                 timeout_s=config.request_timeout_s,
             ),
-            "openai_fallback": OpenAIFallbackProvider(
-                base_url=config.openai_base_url,
+            "openai_responses": OpenAIResponsesProvider(
+                base_url=config.openai_responses_base_url,
+                models_base_url=config.openai_models_base_url,
                 api_key=config.openai_api_key,
-                default_model=config.openai_default_model,
+                text_model=config.openai_text_model,
+                reasoning_model=config.openai_reasoning_model,
+                tools_model=config.openai_tools_model,
                 timeout_s=config.request_timeout_s,
             ),
         }
+        self.openai_models = OpenAIModelsClient(
+            base_url=config.openai_models_base_url,
+            api_key=config.openai_api_key,
+            timeout_s=config.request_timeout_s,
+        )
 
     def healthcheck(self) -> tuple[int, JSONValue]:
         return HTTPStatus.OK, {"status": "ok"}
@@ -65,17 +81,19 @@ class RouterApplication:
                 "streaming": False,
                 "route": "reasoning",
             },
-            "openai_fallback": {
+            "openai_responses": {
                 "enabled": self.config.enable_openai_fallback,
-                "default_model": self.config.openai_default_model,
+                "default_model": self.config.openai_reasoning_model,
                 "streaming": False,
                 "route": "heavy",
+                "api_family": "responses",
             },
         }
         available_routes = {
             route: {
                 "enabled": route_enabled(route, self.config),
                 "provider": provider_for_route(route),
+                "provider_slot": provider_slot_for_route(route),
                 "streaming": route_streaming_supported(route)
                 and route_enabled(route, self.config),
             }
@@ -103,13 +121,20 @@ class RouterApplication:
                     ],
                 },
                 "default_models": {
-                    provider_name: provider_info["default_model"]
-                    for provider_name, provider_info in enabled_providers.items()
+                    "local_vllm": self.config.local_vllm_default_model,
+                    "gemini_fallback": self.config.gemini_default_model,
+                    "openai_text": self.config.openai_text_model,
+                    "openai_reasoning": self.config.openai_reasoning_model,
+                    "openai_tools": self.config.openai_tools_model,
+                    "openai_realtime": self.config.openai_realtime_model,
                 },
+                "openai": _build_openai_capabilities(self.config),
                 "not_yet_supported": [
                     "streaming for reasoning route",
                     "streaming for heavy route",
                     "automatic provider selection beyond auto -> local",
+                    "openai_realtime router execution path",
+                    "openai_agent orchestration layer",
                     "tools, agents and MCP integration",
                 ],
             },
@@ -132,9 +157,10 @@ class RouterApplication:
         except RoutingPolicyError as exc:
             return exc.status_code, exc.payload
 
+        payload_with_slot = _with_provider_slot(payload, selection.provider_slot)
         return self._run_provider_action(
             selection.provider_name,
-            lambda provider: provider.chat_completions(payload),
+            lambda provider: provider.chat_completions(payload_with_slot),
         )
 
     def stream_chat_completions(self, payload: dict[str, JSONValue]) -> StreamingResponse:
@@ -144,7 +170,8 @@ class RouterApplication:
             config=self.config,
         )
         provider = self.providers[selection.provider_name]
-        upstream = provider.stream_chat_completions(payload)
+        payload_with_slot = _with_provider_slot(payload, selection.provider_slot)
+        upstream = provider.stream_chat_completions(payload_with_slot)
         content_type = upstream.headers.get_content_type() or "text/event-stream"
         return StreamingResponse(
             status_code=upstream.getcode(),
@@ -270,6 +297,97 @@ class RouterRequestHandler(BaseHTTPRequestHandler):
             return
 
 
+def _with_provider_slot(
+    payload: dict[str, JSONValue],
+    provider_slot: str | None,
+) -> dict[str, JSONValue]:
+    if provider_slot is None:
+        return dict(payload)
+
+    payload_with_slot = dict(payload)
+    payload_with_slot["provider_slot"] = provider_slot
+    return payload_with_slot
+
+
+def _build_openai_capabilities(config: RouterConfig) -> JSONValue:
+    responses_enabled = config.enable_openai_fallback
+    return {
+        "api_families": {
+            "responses": {
+                "enabled": responses_enabled,
+                "implemented": True,
+                "standard_path": True,
+            },
+            "realtime": {
+                "enabled": False,
+                "implemented": False,
+                "prepared": True,
+            },
+            "models": {
+                "enabled": responses_enabled,
+                "implemented": True,
+                "discovery_only": True,
+            },
+            "agents": {
+                "enabled": False,
+                "implemented": False,
+                "prepared": True,
+                "layer": "orchestration",
+            },
+        },
+        "slots": {
+            "openai_text": {
+                "api_family": "responses",
+                "enabled": responses_enabled,
+                "implemented": False,
+                "prepared": True,
+                "default_model": config.openai_text_model,
+                "routed": False,
+            },
+            "openai_reasoning": {
+                "api_family": "responses",
+                "enabled": responses_enabled,
+                "implemented": True,
+                "default_model": config.openai_reasoning_model,
+                "routed_via": "heavy",
+            },
+            "openai_tools": {
+                "api_family": "responses",
+                "enabled": responses_enabled,
+                "implemented": False,
+                "prepared": True,
+                "default_model": config.openai_tools_model,
+                "routed": False,
+            },
+            OPENAI_AGENT_SLOT: {
+                "api_family": "agents_sdk",
+                "enabled": False,
+                "implemented": False,
+                "prepared": True,
+                "routed": False,
+            },
+            OPENAI_REALTIME_SLOT: {
+                "api_family": "realtime",
+                "enabled": False,
+                "implemented": False,
+                "prepared": True,
+                "default_model": config.openai_realtime_model,
+                "routed": False,
+            },
+            OPENAI_MODELS_SLOT: {
+                "api_family": "models",
+                "enabled": responses_enabled,
+                "implemented": True,
+                "discovery_only": True,
+                "routed": False,
+            },
+        },
+        "responses_slots": list(OPENAI_RESPONSES_SLOTS),
+        "standard_inference_api": "responses",
+        "separate_realtime_api": True,
+    }
+
+
 def _iter_upstream_chunks(upstream) -> Iterator[bytes]:
     with upstream:
         while True:
@@ -280,6 +398,12 @@ def _iter_upstream_chunks(upstream) -> Iterator[bytes]:
 
 
 def load_config() -> RouterConfig:
+    legacy_openai_base_url = os.environ.get(
+        "INFRA_AI_OPENAI_BASE_URL",
+        "https://api.openai.com/v1",
+    )
+    legacy_openai_default_model = os.environ.get("INFRA_AI_OPENAI_DEFAULT_MODEL", "gpt-5.4")
+
     return RouterConfig(
         host=os.environ.get("INFRA_AI_ROUTER_HOST", "127.0.0.1"),
         port=int(os.environ.get("INFRA_AI_ROUTER_PORT", "8010")),
@@ -308,12 +432,35 @@ def load_config() -> RouterConfig:
             "0",
         ).lower()
         in {"1", "true", "yes"},
-        openai_base_url=os.environ.get(
-            "INFRA_AI_OPENAI_BASE_URL",
-            "https://api.openai.com/v1",
+        openai_responses_base_url=os.environ.get(
+            "INFRA_AI_OPENAI_RESPONSES_BASE_URL",
+            legacy_openai_base_url,
+        ),
+        openai_realtime_base_url=os.environ.get(
+            "INFRA_AI_OPENAI_REALTIME_BASE_URL",
+            "https://api.openai.com/v1/realtime",
+        ),
+        openai_models_base_url=os.environ.get(
+            "INFRA_AI_OPENAI_MODELS_BASE_URL",
+            legacy_openai_base_url,
         ),
         openai_api_key=os.environ.get("OPENAI_API_KEY"),
-        openai_default_model=os.environ.get("INFRA_AI_OPENAI_DEFAULT_MODEL"),
+        openai_text_model=os.environ.get(
+            "INFRA_AI_OPENAI_TEXT_MODEL",
+            "gpt-5.4",
+        ),
+        openai_reasoning_model=os.environ.get(
+            "INFRA_AI_OPENAI_REASONING_MODEL",
+            legacy_openai_default_model,
+        ),
+        openai_tools_model=os.environ.get(
+            "INFRA_AI_OPENAI_TOOLS_MODEL",
+            os.environ.get("INFRA_AI_OPENAI_TEXT_MODEL", "gpt-5.4"),
+        ),
+        openai_realtime_model=os.environ.get(
+            "INFRA_AI_OPENAI_REALTIME_MODEL",
+            "gpt-realtime",
+        ),
     )
 
 
@@ -328,7 +475,7 @@ def main() -> None:
     print(
         "infra-ai router listening on "
         f"http://{config.host}:{config.port} with routes "
-        "auto|local -> local_vllm, reasoning -> gemini_fallback, heavy -> openai_fallback"
+        "auto|local -> local_vllm, reasoning -> gemini_fallback, heavy -> openai_reasoning"
     )
     server.serve_forever()
 

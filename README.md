@@ -29,7 +29,11 @@ infra-ai/
       base.py
       local_vllm.py
       gemini_fallback.py
-      openai_fallback.py
+      openai/
+        __init__.py
+        responses.py
+        realtime.py
+        models.py
   scripts/
     healthcheck.sh
     smoke_chat.py
@@ -50,7 +54,7 @@ CLI / spaetere Frontends
   -> Router API
     -> local_vllm
     -> gemini_fallback
-    -> openai_fallback
+    -> openai_responses
 ```
 
 Wichtige Leitplanken:
@@ -123,6 +127,24 @@ Er liefert nur oeffentliche, aus der aktuellen Konfiguration ableitbare Informat
 
 Die Antwort enthaelt bewusst keine Secrets, keine API-Keys und keine sensitiven Provider-Credentials.
 
+## OpenAI-Semantik
+
+Die OpenAI-Seite des Routers ist bewusst feiner aufgeteilt als ein einzelner unscharfer Cloud-Slot:
+
+- `openai_text`: normaler starker Cloud-Text, Coding und Analyse
+- `openai_reasoning`: schwereres Denken und komplexere Problemloesung
+- `openai_tools`: vorbereiteter spaeterer Responses-basierter Tool-Slot
+- `openai_agent`: vorbereitete spaetere Agent-/Orchestrierungs-Schicht, kein normaler Inference-Endpoint
+- `openai_realtime`: separater vorbereiteter Slot fuer Low-Latency / Voice / Audio / Live-Kommunikation
+- `openai_models`: Discovery-/Capabilities-/Health-Pfad, kein Inference-Slot
+
+Wichtige Trennung:
+
+- `Responses API` ist der OpenAI-Standardpfad fuer normalen Router-basierten OpenAI-Textverkehr.
+- `Realtime API` ist davon getrennt und in diesem Commit nur vorbereitet.
+- `Models API` ist fuer Discovery und Introspection, nicht fuer Chat-Inferenz.
+- `Agents` sind eine spaetere Orchestrierungsschicht oberhalb der Modell-API, nicht einfach ein weiterer Chat-Endpoint.
+
 ## Routing-Vertrag
 
 `POST /v1/chat/completions` akzeptiert ein router-spezifisches Top-Level-Feld `route`:
@@ -130,7 +152,7 @@ Die Antwort enthaelt bewusst keine Secrets, keine API-Keys und keine sensitiven 
 - `auto`: deterministisch wie `local`, ohne Cloud-Fallback
 - `local`: lokaler `vLLM`-Provider
 - `reasoning`: `Gemini`-Provider, nur wenn aktiviert
-- `heavy`: `OpenAI`-Provider, nur wenn aktiviert
+- `heavy`: `openai_reasoning` ueber die OpenAI Responses API, nur wenn aktiviert
 
 Wenn `reasoning` oder `heavy` angefordert werden und der jeweilige Provider nicht aktiviert ist, antwortet der Router mit einem expliziten Fehler statt still auf einen anderen Provider zu wechseln.
 
@@ -138,7 +160,10 @@ Wenn `reasoning` oder `heavy` angefordert werden und der jeweilige Provider nich
 
 - lokal: `INFRA_AI_LOCAL_VLLM_DEFAULT_MODEL`
 - Gemini: `INFRA_AI_GEMINI_DEFAULT_MODEL`
-- OpenAI: `INFRA_AI_OPENAI_DEFAULT_MODEL`
+- OpenAI Text: `INFRA_AI_OPENAI_TEXT_MODEL`
+- OpenAI Reasoning: `INFRA_AI_OPENAI_REASONING_MODEL`
+- OpenAI Tools: `INFRA_AI_OPENAI_TOOLS_MODEL`
+- OpenAI Realtime: `INFRA_AI_OPENAI_REALTIME_MODEL`
 
 ## Minimale CLI
 
@@ -208,6 +233,7 @@ Public repo-tauglich:
 - Provider-Abstraktionen
 - lokaler `vLLM`-Provider
 - `Gemini`- und `OpenAI`-Fallback-Schnittstellen ohne echte Secrets
+- die semantischen OpenAI-Slots und ihre API-Trennung
 - CLI-Code
 - Beispielkonfigurationen
 - README und Smoke-Skripte
