@@ -181,6 +181,30 @@ Wichtige Trennung:
 - `Models API` ist fuer Discovery und Introspection, nicht fuer Chat-Inferenz.
 - `Agents` sind eine spaetere Orchestrierungsschicht oberhalb der Modell-API, nicht einfach ein weiterer Chat-Endpoint.
 
+## Tools
+
+`infra-ai` unterstuetzt einen modularen Tool Execution Layer.
+
+Tools werden nicht direkt im Router implementiert. Stattdessen werden sie ueber eine zentrale Registry registriert und durch eine Policy kontrolliert.
+
+```text
+ToolCall
+-> ToolOrchestrator
+-> ToolRegistry
+-> ToolPolicy
+-> ToolExecutor
+```
+
+Ein Tool besteht aus drei Teilen:
+
+- `ToolSpec` beschreibt das Tool.
+- `ToolExecutor` implementiert die Ausfuehrung.
+- die Registrierung in der `ToolRegistry` macht das Tool fuer die Laufzeit verfuegbar.
+
+Die eigentliche Implementierung eines Tools ist bewusst vom Router entkoppelt.
+
+Eine detaillierte Anleitung zum Schreiben eines Tools steht in [docs/tools.md](/home/visimeos/Projects/infra-ai/docs/tools.md).
+
 ## Routing-Vertrag
 
 `POST /v1/chat/completions` akzeptiert ein router-spezifisches Top-Level-Feld `route`:
