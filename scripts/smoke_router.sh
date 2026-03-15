@@ -14,6 +14,8 @@ route="${INFRA_AI_ROUTER_ROUTE:-auto}"
 
 curl -fsS "${router_root_url}/healthz"
 echo
+curl -fsS "${router_v1_url}/router/capabilities"
+echo
 curl -fsS "${router_v1_url}/models"
 echo
 curl -fsS \

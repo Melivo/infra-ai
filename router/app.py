@@ -8,12 +8,21 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from socket import timeout as SocketTimeout
 from typing import cast
 
-from router.policies import RoutingPolicyError, select_provider
+from router.policies import (
+    RoutingPolicyError,
+    provider_for_route,
+    route_enabled,
+    route_streaming_supported,
+    select_provider,
+)
 from router.providers.base import Provider, ProviderError
 from router.providers.gemini_fallback import GeminiFallbackProvider
 from router.providers.local_vllm import LocalVLLMProvider
 from router.providers.openai_fallback import OpenAIFallbackProvider
-from router.schemas import JSONValue, RouterConfig, StreamingResponse
+from router.schemas import JSONValue, RouterConfig, ROUTING_MODES, StreamingResponse
+
+CAPABILITIES_SCHEMA_VERSION = "1"
+ROUTER_VERSION = "0.1.0"
 
 
 class RouterApplication:
@@ -41,6 +50,70 @@ class RouterApplication:
 
     def healthcheck(self) -> tuple[int, JSONValue]:
         return HTTPStatus.OK, {"status": "ok"}
+
+    def capabilities(self) -> tuple[int, JSONValue]:
+        enabled_providers = {
+            "local_vllm": {
+                "enabled": True,
+                "default_model": self.config.local_vllm_default_model,
+                "streaming": True,
+                "route": "local",
+            },
+            "gemini_fallback": {
+                "enabled": self.config.enable_gemini_fallback,
+                "default_model": self.config.gemini_default_model,
+                "streaming": False,
+                "route": "reasoning",
+            },
+            "openai_fallback": {
+                "enabled": self.config.enable_openai_fallback,
+                "default_model": self.config.openai_default_model,
+                "streaming": False,
+                "route": "heavy",
+            },
+        }
+        available_routes = {
+            route: {
+                "enabled": route_enabled(route, self.config),
+                "provider": provider_for_route(route),
+                "streaming": route_streaming_supported(route)
+                and route_enabled(route, self.config),
+            }
+            for route in ROUTING_MODES
+        }
+
+        return (
+            HTTPStatus.OK,
+            {
+                "object": "router.capabilities",
+                "schema_version": CAPABILITIES_SCHEMA_VERSION,
+                "router_version": ROUTER_VERSION,
+                "available_routes": available_routes,
+                "enabled_providers": enabled_providers,
+                "streaming_support": {
+                    "routes": [
+                        route
+                        for route in ROUTING_MODES
+                        if route_streaming_supported(route) and route_enabled(route, self.config)
+                    ],
+                    "providers": [
+                        provider_name
+                        for provider_name, provider_info in enabled_providers.items()
+                        if provider_info["enabled"] is True and provider_info["streaming"] is True
+                    ],
+                },
+                "default_models": {
+                    provider_name: provider_info["default_model"]
+                    for provider_name, provider_info in enabled_providers.items()
+                },
+                "not_yet_supported": [
+                    "streaming for reasoning route",
+                    "streaming for heavy route",
+                    "automatic provider selection beyond auto -> local",
+                    "tools, agents and MCP integration",
+                ],
+            },
+        )
 
     def list_models(self) -> tuple[int, JSONValue]:
         try:
@@ -108,6 +181,10 @@ class RouterRequestHandler(BaseHTTPRequestHandler):
 
         if self.path == "/v1/models":
             self._write_response(*self.server.app.list_models())
+            return
+
+        if self.path == "/v1/router/capabilities":
+            self._write_response(*self.server.app.capabilities())
             return
 
         self._write_response(

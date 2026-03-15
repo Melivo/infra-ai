@@ -34,15 +34,16 @@ def build_payload(
     }
 
 
-def request_chat(*, base_url: str, payload: dict[str, object], timeout_s: float) -> dict[str, object]:
-    url = f"{base_url.rstrip('/')}/chat/completions"
-    body = json.dumps(payload).encode("utf-8")
-    req = request.Request(
-        url,
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
+def request_json(*, url: str, payload: dict[str, object] | None, timeout_s: float) -> dict[str, object]:
+    data = None
+    method = "GET"
+    headers = {"Accept": "application/json"}
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+        method = "POST"
+        headers["Content-Type"] = "application/json"
+
+    req = request.Request(url, data=data, headers=headers, method=method)
 
     try:
         with request.urlopen(req, timeout=timeout_s) as response:
@@ -57,6 +58,16 @@ def request_chat(*, base_url: str, payload: dict[str, object], timeout_s: float)
     if not isinstance(decoded, dict):
         raise SystemExit("router response was not a JSON object")
     return decoded
+
+
+def request_chat(*, base_url: str, payload: dict[str, object], timeout_s: float) -> dict[str, object]:
+    url = f"{base_url.rstrip('/')}/chat/completions"
+    return request_json(url=url, payload=payload, timeout_s=timeout_s)
+
+
+def request_capabilities(*, base_url: str, timeout_s: float) -> dict[str, object]:
+    url = f"{base_url.rstrip('/')}/router/capabilities"
+    return request_json(url=url, payload=None, timeout_s=timeout_s)
 
 
 def stream_chat(
@@ -198,6 +209,11 @@ def parse_args() -> argparse.Namespace:
         help="Request streamed output from the router. Currently intended for local routing.",
     )
     parser.add_argument(
+        "--capabilities",
+        action="store_true",
+        help="Fetch router capabilities and print them as JSON.",
+    )
+    parser.add_argument(
         "--raw",
         action="store_true",
         help="Print raw JSON, or raw event-stream lines when combined with --stream.",
@@ -217,6 +233,15 @@ def _read_prompt(args: argparse.Namespace) -> str:
 
 def main() -> None:
     args = parse_args()
+
+    if args.capabilities:
+        capabilities = request_capabilities(
+            base_url=args.base_url,
+            timeout_s=args.timeout,
+        )
+        print(json.dumps(capabilities, indent=2))
+        return
+
     prompt = _read_prompt(args)
     payload = build_payload(
         prompt=prompt,

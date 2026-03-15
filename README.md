@@ -103,8 +103,25 @@ Standardmaessig lauscht der Router auf `http://127.0.0.1:8010`.
 Aktuell exponiert er:
 
 - `GET /healthz`
+- `GET /v1/router/capabilities`
 - `GET /v1/models`
 - `POST /v1/chat/completions`
+
+## Router-Introspection
+
+`GET /v1/router/capabilities` ist ein read-only Introspection-Endpunkt fuer CLI und spaetere Frontends.
+
+Er liefert nur oeffentliche, aus der aktuellen Konfiguration ableitbare Informationen, zum Beispiel:
+
+- `available_routes`
+- `enabled_providers`
+- `streaming_support`
+- `default_models`
+- `schema_version`
+- `router_version`
+- `not_yet_supported`
+
+Die Antwort enthaelt bewusst keine Secrets, keine API-Keys und keine sensitiven Provider-Credentials.
 
 ## Routing-Vertrag
 
@@ -129,6 +146,12 @@ Die CLI ist ein bewusst duennes Frontend und enthaelt keine Provider- oder Agent
 
 ```bash
 python3 -m cli.main --route local "Fasse in einem Satz zusammen, wofuer infra-ai gebaut ist."
+```
+
+Capabilities abrufen:
+
+```bash
+python3 -m cli.main --capabilities
 ```
 
 Optional mit stdin:
@@ -189,6 +212,7 @@ Public repo-tauglich:
 - Beispielkonfigurationen
 - README und Smoke-Skripte
 - der oeffentliche Routing-Vertrag mit `route=auto|local|reasoning|heavy`
+- der oeffentliche Introspection-Vertrag von `GET /v1/router/capabilities`
 
 Privat bleiben muessen:
 

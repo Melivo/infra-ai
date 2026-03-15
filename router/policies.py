@@ -2,9 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from router.schemas import JSONValue, ProviderSelection, RouterConfig, RoutingMode
-
-ALLOWED_ROUTING_MODES = {"auto", "local", "reasoning", "heavy"}
+from router.schemas import JSONValue, ProviderSelection, RouterConfig, ROUTING_MODES, RoutingMode
 
 
 class RoutingPolicyError(RuntimeError):
@@ -30,31 +28,18 @@ def select_provider(
         return ProviderSelection(routing_mode="local", provider_name="local_vllm")
 
     routing_mode = resolve_routing_mode(payload)
-    if routing_mode in {"auto", "local"}:
-        return ProviderSelection(routing_mode=routing_mode, provider_name="local_vllm")
+    provider_name = provider_for_route(routing_mode)
+    if route_enabled(routing_mode, config):
+        return ProviderSelection(routing_mode=routing_mode, provider_name=provider_name)
 
-    if routing_mode == "reasoning":
-        if not config.enable_gemini_fallback:
-            raise RoutingPolicyError(
-                "Reasoning route is not enabled.",
-                status_code=503,
-                payload=_error_payload(
-                    "route_unavailable",
-                    "route=reasoning requires an enabled Gemini provider in router config.",
-                ),
-            )
-        return ProviderSelection(routing_mode=routing_mode, provider_name="gemini_fallback")
-
-    if not config.enable_openai_fallback:
-        raise RoutingPolicyError(
-            "Heavy route is not enabled.",
-            status_code=503,
-            payload=_error_payload(
-                "route_unavailable",
-                "route=heavy requires an enabled OpenAI provider in router config.",
-            ),
-        )
-    return ProviderSelection(routing_mode=routing_mode, provider_name="openai_fallback")
+    raise RoutingPolicyError(
+        f"Route {routing_mode} is not enabled.",
+        status_code=503,
+        payload=_error_payload(
+            "route_unavailable",
+            f"route={routing_mode} requires an enabled {provider_name} provider in router config.",
+        ),
+    )
 
 
 def resolve_routing_mode(payload: Mapping[str, object] | None) -> RoutingMode:
@@ -73,7 +58,7 @@ def resolve_routing_mode(payload: Mapping[str, object] | None) -> RoutingMode:
         )
 
     normalized_route = route.strip().lower()
-    if normalized_route not in ALLOWED_ROUTING_MODES:
+    if normalized_route not in ROUTING_MODES:
         raise RoutingPolicyError(
             f"Unsupported route {route!r}.",
             status_code=400,
@@ -84,6 +69,26 @@ def resolve_routing_mode(payload: Mapping[str, object] | None) -> RoutingMode:
         )
 
     return normalized_route  # type: ignore[return-value]
+
+
+def route_enabled(route: RoutingMode, config: RouterConfig) -> bool:
+    if route in {"auto", "local"}:
+        return True
+    if route == "reasoning":
+        return config.enable_gemini_fallback
+    return config.enable_openai_fallback
+
+
+def provider_for_route(route: RoutingMode) -> str:
+    if route in {"auto", "local"}:
+        return "local_vllm"
+    if route == "reasoning":
+        return "gemini_fallback"
+    return "openai_fallback"
+
+
+def route_streaming_supported(route: RoutingMode) -> bool:
+    return route in {"auto", "local"}
 
 
 def _error_payload(error_type: str, message: str) -> JSONValue:

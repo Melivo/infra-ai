@@ -7,6 +7,7 @@ from typing import Literal, TypeAlias
 JSONPrimitive: TypeAlias = None | bool | int | float | str
 JSONValue: TypeAlias = JSONPrimitive | list["JSONValue"] | dict[str, "JSONValue"]
 RoutingMode: TypeAlias = Literal["auto", "local", "reasoning", "heavy"]
+ROUTING_MODES: tuple[RoutingMode, ...] = ("auto", "local", "reasoning", "heavy")
 
 
 @dataclass(frozen=True)
