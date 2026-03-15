@@ -92,6 +92,25 @@ class RouterRequestValidationTests(unittest.TestCase):
 
         self.assertEqual(exc_info.exception.payload["error"]["type"], "invalid_route")
 
+    def test_tool_call_arguments_must_be_an_object(self) -> None:
+        with self.assertRaises(RequestValidationError) as exc_info:
+            validate_chat_request_payload(
+                build_payload(tool_call={"name": "echo", "arguments": "hello"})
+            )
+
+        self.assertEqual(exc_info.exception.payload["error"]["type"], "invalid_tool_call")
+
+    def test_tool_call_does_not_support_streaming_yet(self) -> None:
+        with self.assertRaises(RequestValidationError) as exc_info:
+            validate_chat_request_payload(
+                build_payload(
+                    stream=True,
+                    tool_call={"name": "echo", "arguments": {"message": "hello"}},
+                )
+            )
+
+        self.assertEqual(exc_info.exception.payload["error"]["type"], "invalid_tool_call")
+
 
 if __name__ == "__main__":
     unittest.main()

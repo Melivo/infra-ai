@@ -15,6 +15,8 @@ Aktuell existieren die grundlegenden Bausteine:
 
 Der Layer ist damit vorbereitet, aber noch nicht in den Router-Request-Flow integriert.
 
+Aktuell gibt es einen ersten minimalen Integrationspfad ueber `POST /v1/chat/completions` mit einem expliziten `tool_call`-Feld. Dieser Pfad ist bewusst klein gehalten und dient nur dazu, die bestehende Tool-Pipeline kontrolliert ueber den Router nutzbar zu machen.
+
 ## Grundmodell
 
 ```text
@@ -57,7 +59,6 @@ Der aktuelle Zielablauf fuer einen normalisierten Tool-Aufruf ist:
 
 Bewusst noch nicht Teil des aktuellen Tool Layers sind:
 
-- Router-Integration
 - API-Exposure
 - Tool-Erkennung aus Modellantworten
 - Multi-Step-Orchestrierung
@@ -66,6 +67,14 @@ Bewusst noch nicht Teil des aktuellen Tool Layers sind:
 - JSON-Schema-Validierung
 - Workspace-Pfadvalidierung
 - HTTP-Allowlist-Logik
+
+## Aktuelles Beispieltool
+
+Der Router registriert aktuell nur ein minimales Beispieltool:
+
+- `echo`
+
+`echo` gibt die uebergebenen Argumente unveraendert als `ToolResult` zurueck. Das Tool dient nur als Infrastrukturtest fuer Registry, Policy, Orchestrator und den minimalen Router-Integrationspfad.
 
 ## Leitlinien fuer spaetere Tool-Implementierungen
 

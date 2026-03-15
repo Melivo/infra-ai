@@ -287,6 +287,7 @@ class RouterHTTPContractTests(unittest.TestCase):
         self.assertIsInstance(payload["streaming_support"], dict)
         self.assertIsInstance(payload["default_models"], dict)
         self.assertIsInstance(payload["frontend_contract"], dict)
+        self.assertIsInstance(payload["tools"], list)
         self.assertIsInstance(payload["not_yet_supported"], list)
 
         self.assertEqual(
@@ -304,6 +305,7 @@ class RouterHTTPContractTests(unittest.TestCase):
         self.assertEqual(payload["available_routes"]["reasoning"]["streaming"], False)
         self.assertIn("local", payload["streaming_support"]["routes"])
         self.assertNotIn("reasoning", payload["streaming_support"]["routes"])
+        self.assertEqual(payload["tools"], ["echo"])
 
     def test_models_contract_currently_routes_to_local_provider(self) -> None:
         app, providers = self.make_app(
@@ -364,6 +366,47 @@ class RouterHTTPContractTests(unittest.TestCase):
             providers["openai_responses"].last_payload.get("provider_slot"),
             "openai_reasoning",
         )
+
+    def test_explicit_tool_call_returns_tool_result_without_provider_routing(self) -> None:
+        app, providers = self.make_app(build_config())
+
+        status_code, response_headers, payload = perform_json_request(
+            app,
+            method="POST",
+            path="/v1/chat/completions",
+            body=build_payload(
+                tool_call={
+                    "name": "echo",
+                    "arguments": {"message": "hello"},
+                }
+            ),
+        )
+
+        self.assertEqual(status_code, 200)
+        self.assertEqual(response_headers["content-type"], "application/json")
+        self.assertEqual(payload["object"], "chat.completion")
+        self.assertEqual(payload["tool_result"]["name"], "echo")
+        self.assertEqual(payload["tool_result"]["ok"], True)
+        self.assertEqual(payload["tool_result"]["output_json"], {"message": "hello"})
+        self.assertEqual(payload["choices"][0]["message"]["role"], "assistant")
+        self.assertEqual(providers["local_vllm"].last_payload, None)
+        self.assertEqual(providers["gemini_fallback"].last_payload, None)
+        self.assertEqual(providers["openai_responses"].last_payload, None)
+
+    def test_chat_without_tool_call_keeps_existing_provider_path(self) -> None:
+        app, providers = self.make_app(build_config())
+
+        status_code, response_headers, payload = perform_json_request(
+            app,
+            method="POST",
+            path="/v1/chat/completions",
+            body=build_payload(),
+        )
+
+        self.assertEqual(status_code, 200)
+        self.assertEqual(response_headers["content-type"], "application/json")
+        self.assertEqual(payload["provider"], "local_vllm")
+        self.assertIsNotNone(providers["local_vllm"].last_payload)
 
     def test_disabled_routes_return_route_unavailable(self) -> None:
         app, _ = self.make_app(build_config())

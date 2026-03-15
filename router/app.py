@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 from collections.abc import Callable, Iterator
+from dataclasses import asdict
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from socket import timeout as SocketTimeout
 from typing import cast
+from uuid import uuid4
 
 from router.policies import (
     RoutingPolicyError,
@@ -29,6 +32,11 @@ from router.providers.openai import (
 )
 from router.providers.openai.models import OPENAI_MODELS_SLOT
 from router.schemas import JSONValue, RouterConfig, ROUTING_MODES, StreamingResponse
+from router.tools.example_tools import register_example_tools
+from router.tools.orchestrator import ToolOrchestrator
+from router.tools.policy import ToolExecutionDeniedError, ToolPolicy
+from router.tools.registry import ToolNotFoundError, ToolRegistry
+from router.tools.types import ToolCall, ToolContext
 
 CAPABILITIES_SCHEMA_VERSION = "1"
 ROUTER_VERSION = "0.1.0"
@@ -81,6 +89,13 @@ class RouterApplication:
             base_url=config.openai_models_base_url,
             api_key=config.openai_api_key,
             timeout_s=config.request_timeout_s,
+        )
+        self.tool_registry = ToolRegistry()
+        register_example_tools(self.tool_registry)
+        self.tool_policy = ToolPolicy()
+        self.tool_orchestrator = ToolOrchestrator(
+            registry=self.tool_registry,
+            policy=self.tool_policy,
         )
 
     def healthcheck(self) -> tuple[int, JSONValue]:
@@ -149,13 +164,16 @@ class RouterApplication:
                     "openai_realtime": self.config.openai_realtime_model,
                 },
                 "openai": _build_openai_capabilities(self.config),
+                "tools": [spec.name for spec in self.tool_registry.list_enabled_specs()],
                 "not_yet_supported": [
                     "streaming for reasoning route",
                     "streaming for heavy route",
                     "automatic provider selection beyond auto -> local",
                     "openai_realtime router execution path",
                     "openai_agent orchestration layer",
-                    "tools, agents and MCP integration",
+                    "automatic tool-call extraction from model output",
+                    "multi-step tool loops",
+                    "agents and MCP integration",
                 ],
             },
         )
@@ -207,6 +225,53 @@ class RouterApplication:
             status_code=upstream.getcode(),
             content_type=content_type,
             chunks=_iter_upstream_chunks(upstream),
+        )
+
+    def execute_tool_call(self, payload: dict[str, JSONValue]) -> tuple[int, JSONValue]:
+        tool_call_payload = cast(dict[str, JSONValue], payload["tool_call"])
+        tool_call = ToolCall(
+            call_id=f"toolcall-{uuid4().hex}",
+            name=cast(str, tool_call_payload["name"]),
+            arguments=cast(dict[str, JSONValue], tool_call_payload["arguments"]),
+        )
+        ctx = ToolContext(request_id=f"req-{uuid4().hex}")
+
+        try:
+            result = asyncio.run(self.tool_orchestrator.run(tool_call, ctx))
+        except ToolNotFoundError as exc:
+            return HTTPStatus.NOT_FOUND, _error_payload("tool_not_found", str(exc))
+        except ToolExecutionDeniedError as exc:
+            return HTTPStatus.FORBIDDEN, _error_payload(
+                "tool_execution_denied",
+                str(exc),
+            )
+        except Exception as exc:
+            return HTTPStatus.INTERNAL_SERVER_ERROR, _error_payload(
+                "tool_execution_failed",
+                str(exc),
+            )
+
+        output_text = result.output_text
+        if output_text is None and result.output_json is not None:
+            output_text = json.dumps(result.output_json)
+
+        return (
+            HTTPStatus.OK,
+            {
+                "id": f"chatcmpl-tool-{tool_call.call_id}",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": output_text or "",
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "tool_result": asdict(result),
+            },
         )
 
     def _run_provider_action(
@@ -273,6 +338,10 @@ class RouterRequestHandler(BaseHTTPRequestHandler):
             return
 
         _log_chat_request(payload)
+        if "tool_call" in payload:
+            self._write_response(*self.server.app.execute_tool_call(payload))
+            return
+
         if payload.get("stream") is True:
             self._write_stream_response(payload)
             return
@@ -389,6 +458,7 @@ def _log_chat_request(payload: dict[str, JSONValue]) -> None:
         streaming=payload.get("stream") is True,
         messages_count=len(messages) if isinstance(messages, list) else None,
         model_mode=_describe_model_mode(model),
+        tool_name=_extract_tool_name(payload.get("tool_call")),
     )
 
 
@@ -429,6 +499,15 @@ def _describe_model_mode(model: JSONValue) -> str:
     return "explicit"
 
 
+def _extract_tool_name(tool_call: JSONValue) -> str | None:
+    if not isinstance(tool_call, dict):
+        return None
+    name = tool_call.get("name")
+    if isinstance(name, str):
+        return name
+    return None
+
+
 def _extract_error_type(payload: JSONValue) -> str | None:
     if not isinstance(payload, dict):
         return None
@@ -457,6 +536,14 @@ def validate_chat_request_payload(payload: dict[str, JSONValue]) -> None:
 
     if "model" in payload:
         _validate_model_field(payload["model"])
+
+    if "tool_call" in payload:
+        _validate_tool_call(payload["tool_call"])
+        if payload.get("stream") is True:
+            raise RequestValidationError(
+                "invalid_tool_call",
+                "tool_call requests do not support stream=true.",
+            )
 
     _validate_messages(payload.get("messages"))
 
@@ -495,6 +582,28 @@ def _validate_model_field(model: JSONValue) -> None:
 
     if normalized_model.lower() in MODEL_AUTO_ALIASES:
         return
+
+
+def _validate_tool_call(tool_call: JSONValue) -> None:
+    if not isinstance(tool_call, dict):
+        raise RequestValidationError(
+            "invalid_tool_call",
+            "The tool_call field must be an object with name and arguments.",
+        )
+
+    name = tool_call.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise RequestValidationError(
+            "invalid_tool_call",
+            "The tool_call.name field must be a non-blank string.",
+        )
+
+    arguments = tool_call.get("arguments")
+    if not isinstance(arguments, dict):
+        raise RequestValidationError(
+            "invalid_tool_call",
+            "The tool_call.arguments field must be a JSON object.",
+        )
 
 
 def _validate_messages(messages: JSONValue) -> None:

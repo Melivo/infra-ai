@@ -205,6 +205,32 @@ Die eigentliche Implementierung eines Tools ist bewusst vom Router entkoppelt.
 
 Eine detaillierte Anleitung zum Schreiben eines Tools steht in [docs/tools.md](/home/visimeos/Projects/infra-ai/docs/tools.md).
 
+Aktuell ist die Router-Integration bewusst klein:
+
+- `POST /v1/chat/completions` akzeptiert optional ein Feld `tool_call`
+- derzeit ist nur das Beispieltool `echo` registriert
+- `tool_call` ist ein expliziter Router-Pfad und noch keine allgemeine LLM-Tool-Calling-Implementierung
+
+Beispiel:
+
+```json
+{
+  "model": "auto",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Run the echo tool."
+    }
+  ],
+  "tool_call": {
+    "name": "echo",
+    "arguments": {
+      "message": "hello"
+    }
+  }
+}
+```
+
 ## Routing-Vertrag
 
 `POST /v1/chat/completions` akzeptiert ein router-spezifisches Top-Level-Feld `route`:
