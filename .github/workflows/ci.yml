@@ -25,11 +25,22 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
       - name: Install dependencies
         run: pip install openai requests
 
+      - name: Install markdownlint-cli
+        run: npm install -g markdownlint-cli
+
       - name: Run basic repository checks
         run: python -m py_compile $(git ls-files '*.py')
+
+      - name: Lint Markdown
+        run: markdownlint $(git ls-files '*.md')
 
       - name: Run healthcheck script
         run: bash scripts/healthcheck.sh || true
