@@ -13,8 +13,9 @@ Die Anbindung soll spaeter sauber in die bestehende Struktur passen:
 ```text
 Frontend
   -> infra-ai Router
-    -> MCP Compatibility Layer
-      -> Docker MCP Catalog
+    -> Tool Execution Layer
+      -> MCP Adapter
+        -> Docker MCP Catalog / MCP Toolkit / MCP Gateway
 ```
 
 Wichtig:
