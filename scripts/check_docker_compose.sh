@@ -6,5 +6,4 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 
 docker compose \
   -f "${REPO_ROOT}/vllm/docker-compose.yml" \
-  --env-file "${REPO_ROOT}/vllm/.env" \
   config >/dev/null

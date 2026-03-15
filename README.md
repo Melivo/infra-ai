@@ -1,8 +1,6 @@
 # infra-ai
 
-Minimales lokales Inference-Backend fuer `Qwen/Qwen3-32B` mit `vLLM` und OpenAI-kompatibler API auf:
-
-`http://localhost:8000/v1`
+Minimales lokales Inference-Backend fuer `Qwen/Qwen3-32B` mit `vLLM` und OpenAI-kompatibler API auf `http://localhost:8000/v1`.
 
 ## Struktur
 
@@ -11,87 +9,60 @@ infra-ai/
   vllm/
     docker-compose.yml
     start.sh
-    .env
+    .env.example
   scripts/
-    test_inference.py
     healthcheck.sh
-  README.md
+    test_inference.py
+  .github/
+    workflows/
+      ci.yml
 ```
 
-## Runtime-Pfade
+## Runtime-Daten
 
 Die Laufzeitdaten liegen bewusst ausserhalb von Git:
 
-- Modelle: `~/.ai/models`
-- Cache: `~/.ai/cache`
-- Logs: `~/.ai/logs`
+- `~/.ai/models`
+- `~/.ai/cache`
+- `~/.ai/logs`
 
-## Starten
+## Vorbereitung
 
-1. Optional Hugging Face Token in [vllm/.env](/home/visimeos/Projects/infra-ai/vllm/.env) setzen.
-2. Server starten:
+1. `cp vllm/.env.example vllm/.env`
+2. Trage `HF_TOKEN` in `vllm/.env` ein, falls du private oder rate-limitierte Hugging-Face-Artefakte brauchst.
+
+## Server starten
 
 ```bash
-cd ~/Projects/infra-ai/vllm
-./start.sh
+cd vllm
+docker compose up -d
 ```
 
 Der Container heisst `vllm-qwen` und exponiert Port `8000`.
 
-## API testen
-
-Healthcheck:
+## Healthcheck
 
 ```bash
-cd ~/Projects/infra-ai
-./scripts/healthcheck.sh
+curl http://localhost:8000/v1/models
 ```
 
-Inference-Test mit dem offiziellen Python-Client:
+## Test-Client
 
 ```bash
-cd ~/Projects/infra-ai
-python3 -m pip install openai
-python3 scripts/test_inference.py
+python -m pip install openai
+python scripts/test_inference.py
 ```
 
-Der Python-Test nutzt:
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    base_url="http://localhost:8000/v1",
-    api_key="local",
-)
-```
-
-## Pre-commit
-
-Lokale Checks einrichten:
+## Lokale Checks
 
 ```bash
-cd ~/Projects/infra-ai
-python3 -m pip install pre-commit
+python -m pip install pre-commit
 pre-commit install
-```
-
-Alle Checks manuell laufen lassen:
-
-```bash
-cd ~/Projects/infra-ai
 pre-commit run --all-files
 ```
 
-Enthalten sind:
-
-- `shellcheck` fuer Shell-Scripts
-- `bash -n` fuer Shell-Syntax
-- Python-Kompilierung fuer `scripts/test_inference.py`
-- `docker compose config` fuer die vLLM-Compose-Datei
-
 ## Hinweise
 
-- Das Setup ist absichtlich minimal und nur auf den lokalen Inference-Backend-Pfad fokussiert.
+- `vllm/.env` ist lokal und darf nicht committed werden.
 - Die vLLM-Parameter sind fuer eine einzelne RTX 4090 (24 GB VRAM) abgestimmt.
 - `--trust-remote-code` ist fuer `Qwen/Qwen3-32B` aktiviert.

@@ -21,4 +21,4 @@ repos:
         entry: bash scripts/check_docker_compose.sh
         language: system
         pass_filenames: false
-        files: ^vllm/(docker-compose\.yml|\.env|start\.sh)$
+        files: ^vllm/(docker-compose\.yml|\.env|\.env\.example|start\.sh)$

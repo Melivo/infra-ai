@@ -4,10 +4,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
 
-set -a
-# shellcheck source=/dev/null
-source "${SCRIPT_DIR}/.env"
-set +a
+if [[ -f "${SCRIPT_DIR}/.env" ]]; then
+  set -a
+  # shellcheck source=/dev/null
+  source "${SCRIPT_DIR}/.env"
+  set +a
+fi
 
 export AI_MODELS_DIR="${AI_MODELS_DIR:-${HOME}/.ai/models}"
 export AI_CACHE_DIR="${AI_CACHE_DIR:-${HOME}/.ai/cache}"
