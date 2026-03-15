@@ -30,6 +30,7 @@ services:
       - auto
       - --gpu-memory-utilization
       - "0.80"
+      - --enforce-eager
       - --max-model-len
       - "8192"
       - --trust-remote-code
