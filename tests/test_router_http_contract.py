@@ -561,6 +561,37 @@ class RouterHTTPContractTests(unittest.TestCase):
         self.assert_error_payload(payload, error_type="provider_unavailable")
         self.assertEqual(payload["error"]["message"], "Bad gateway from upstream.")
 
+    def test_router_surfaces_timeout_errors_consistently(self) -> None:
+        app = self.make_error_app(
+            build_config(),
+            "local_vllm",
+            ErrorProvider(
+                "local_vllm",
+                chat_error=ProviderError(
+                    "local_vllm request timed out",
+                    status_code=504,
+                    payload={
+                        "error": {
+                            "type": "timeout",
+                            "message": "Upstream provider request timed out.",
+                        }
+                    },
+                ),
+            ),
+        )
+
+        status_code, response_headers, payload = perform_json_request(
+            app,
+            method="POST",
+            path="/v1/chat/completions",
+            body=build_payload(route="local"),
+        )
+
+        self.assertEqual(status_code, 504)
+        self.assertEqual(response_headers["content-type"], "application/json")
+        self.assert_error_payload(payload, error_type="timeout")
+        self.assertEqual(payload["error"]["message"], "Upstream provider request timed out.")
+
 
 if __name__ == "__main__":
     unittest.main()

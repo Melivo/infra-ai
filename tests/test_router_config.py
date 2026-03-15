@@ -80,6 +80,14 @@ class RouterConfigValidationTests(unittest.TestCase):
         self.assertIn("INFRA_AI_ROUTER_PORT", str(exc_info.exception))
         self.assertIn("INFRA_AI_REQUEST_TIMEOUT_S", str(exc_info.exception))
 
+    def test_request_timeout_is_propagated_to_all_provider_clients(self) -> None:
+        app = RouterApplication(build_config(request_timeout_s=42.5))
+
+        self.assertEqual(app.providers["local_vllm"].timeout_s, 42.5)
+        self.assertEqual(app.providers["gemini_fallback"].timeout_s, 42.5)
+        self.assertEqual(app.providers["openai_responses"].timeout_s, 42.5)
+        self.assertEqual(app.openai_models.timeout_s, 42.5)
+
 
 if __name__ == "__main__":
     unittest.main()
