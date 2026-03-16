@@ -9,6 +9,9 @@ ROUTER_LOG_DIR="${HOME}/.ai/logs"
 ROUTER_LOG_FILE="${ROUTER_LOG_DIR}/router.log"
 VENV_DIR="${REPO_ROOT}/.venv"
 PYTHON_BIN="${VENV_DIR}/bin/python"
+BOOTSTRAP_SCRIPT="${REPO_ROOT}/scripts/bootstrap.sh"
+REQUIREMENTS_FILE="${REPO_ROOT}/requirements.txt"
+REQUIREMENTS_STAMP_FILE="${VENV_DIR}/.infra-ai-requirements.sha256"
 CLI_MODE="auto"
 CLI_ARGS=()
 
@@ -59,6 +62,38 @@ check_nvidia_runtime() {
   if [[ ! -S /run/nvidia-persistenced/socket ]]; then
     echo "missing /run/nvidia-persistenced/socket; NVIDIA persistence daemon is not ready" >&2
     echo "try: sudo systemctl enable --now nvidia-persistenced" >&2
+    exit 1
+  fi
+}
+
+requirements_hash() {
+  sha256sum "${REQUIREMENTS_FILE}" | awk '{print $1}'
+}
+
+ensure_python_environment() {
+  if [[ ! -d "${VENV_DIR}" ]]; then
+    echo "python environment missing; running bootstrap"
+    bash "${BOOTSTRAP_SCRIPT}"
+    return
+  fi
+
+  if [[ ! -f "${REQUIREMENTS_FILE}" ]]; then
+    return
+  fi
+
+  if [[ ! -f "${REQUIREMENTS_STAMP_FILE}" ]]; then
+    echo "python dependencies are not bootstrapped for this checkout" >&2
+    echo "run: bash scripts/bootstrap.sh" >&2
+    exit 1
+  fi
+
+  local current_hash
+  local expected_hash
+  current_hash="$(requirements_hash)"
+  expected_hash="$(cat "${REQUIREMENTS_STAMP_FILE}")"
+  if [[ "${current_hash}" != "${expected_hash}" ]]; then
+    echo "requirements.txt changed since the last bootstrap" >&2
+    echo "run: bash scripts/bootstrap.sh" >&2
     exit 1
   fi
 }
@@ -122,13 +157,7 @@ if [[ ! -f "${REPO_ROOT}/vllm/.env" ]]; then
   exit 1
 fi
 
-if [[ ! -d "${VENV_DIR}" ]]; then
-  python3 -m venv "${VENV_DIR}"
-fi
-
-if [[ -f "${REPO_ROOT}/requirements.txt" ]]; then
-  "${PYTHON_BIN}" -m pip install -r "${REPO_ROOT}/requirements.txt"
-fi
+ensure_python_environment
 
 check_nvidia_runtime
 

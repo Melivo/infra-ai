@@ -82,9 +82,10 @@ Die Laufzeitdaten liegen bewusst ausserhalb von Git:
 Alle Befehle unten werden vom Repository-Root ausgefuehrt.
 
 1. `cp vllm/.env.example vllm/.env`
-2. Optional: Lege lokale Konfigurationsdateien aus den Beispielen an, zum Beispiel `config/router.local.env` und `config/providers.local.env`.
-3. Trage nur in lokalen, nicht versionierten Dateien echte API-Keys ein.
-4. Falls die GPU bereits leicht belegt ist, senke `VLLM_GPU_MEMORY_UTILIZATION` in `vllm/.env` etwas unter den Default, zum Beispiel auf `0.85`.
+2. `bash scripts/bootstrap.sh`
+3. Optional: Lege lokale Konfigurationsdateien aus den Beispielen an, zum Beispiel `config/router.local.env` und `config/providers.local.env`.
+4. Trage nur in lokalen, nicht versionierten Dateien echte API-Keys ein.
+5. Falls die GPU bereits leicht belegt ist, senke `VLLM_GPU_MEMORY_UTILIZATION` in `vllm/.env` etwas unter den Default, zum Beispiel auf `0.85`.
 
 Wenn du Cloud-Provider aktivierst, validiert der Router die notwendige Konfiguration beim Start fail-fast und beendet sich mit einer klaren Fehlermeldung, statt erst beim ersten Request halb-konfiguriert zu scheitern.
 
@@ -120,7 +121,7 @@ bash scripts/stop.sh
 `scripts/start.sh` startet `vLLM`, startet oder verwendet den Router auf `http://127.0.0.1:8010/v1`, wartet auf `GET /healthz` und wechselt auf einem interaktiven Terminal danach direkt ins `infra-ai` CLI. `vLLM` bleibt dabei der separate lokale Provider auf Port `8000`.
 Falls du nur den Stack ohne CLI starten willst, nutze `bash scripts/start.sh --no-cli`.
 Der Router schreibt dabei nach `~/.ai/logs/router.log`.
-Falls `.venv` noch nicht existiert, legt das Skript sie an und installiert `requirements.txt`, bevor der Router gestartet wird.
+Beim ersten Start ohne `.venv` bootstrapped das Skript die Python-Umgebung automatisch. Wenn sich `requirements.txt` spaeter aendert, fordert `scripts/start.sh` stattdessen explizit zu `bash scripts/bootstrap.sh` auf, statt bei jedem Start erneut `pip install -r requirements.txt` auszufuehren.
 Die Router-PID liegt stabil unter `~/.ai/run/router.pid`; das Script prueft ausserdem, ob diese PID wirklich zu `router.app` gehoert, bevor es einen zweiten Start blockiert oder beim Stoppen beendet.
 Vor dem Docker-Start prueft das Script ausserdem, ob `nvidia-smi` funktioniert und ob `/run/nvidia-persistenced/socket` vorhanden ist. Falls nicht, bekommst du einen klaren Hinweis statt eines spaeteren OCI-Fehlers.
 
