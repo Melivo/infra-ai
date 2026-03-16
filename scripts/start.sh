@@ -9,7 +9,6 @@ ROUTER_LOG_DIR="${HOME}/.ai/logs"
 ROUTER_LOG_FILE="${ROUTER_LOG_DIR}/router.log"
 VENV_DIR="${REPO_ROOT}/.venv"
 PYTHON_BIN="${VENV_DIR}/bin/python"
-BOOTSTRAP_SCRIPT="${REPO_ROOT}/scripts/bootstrap.sh"
 REQUIREMENTS_FILE="${REPO_ROOT}/requirements.txt"
 REQUIREMENTS_STAMP_FILE="${VENV_DIR}/.infra-ai-requirements.sha256"
 CLI_MODE="auto"
@@ -71,10 +70,10 @@ requirements_hash() {
 }
 
 ensure_python_environment() {
-  if [[ ! -d "${VENV_DIR}" ]]; then
-    echo "python environment missing; running bootstrap"
-    bash "${BOOTSTRAP_SCRIPT}"
-    return
+  if [[ ! -x "${PYTHON_BIN}" ]]; then
+    echo "python environment is not ready at ${PYTHON_BIN}" >&2
+    echo "run: bash scripts/bootstrap.sh" >&2
+    exit 1
   fi
 
   if [[ ! -f "${REQUIREMENTS_FILE}" ]]; then

@@ -121,7 +121,7 @@ bash scripts/stop.sh
 `scripts/start.sh` startet `vLLM`, startet oder verwendet den Router auf `http://127.0.0.1:8010/v1`, wartet auf `GET /healthz` und wechselt auf einem interaktiven Terminal danach direkt ins `infra-ai` CLI. `vLLM` bleibt dabei der separate lokale Provider auf Port `8000`.
 Falls du nur den Stack ohne CLI starten willst, nutze `bash scripts/start.sh --no-cli`.
 Der Router schreibt dabei nach `~/.ai/logs/router.log`.
-Beim ersten Start ohne `.venv` bootstrapped das Skript die Python-Umgebung automatisch. Wenn sich `requirements.txt` spaeter aendert, fordert `scripts/start.sh` stattdessen explizit zu `bash scripts/bootstrap.sh` auf, statt bei jedem Start erneut `pip install -r requirements.txt` auszufuehren.
+`scripts/start.sh` setzt eine vorbereitete Python-Umgebung voraus und installiert nichts. Wenn `.venv` fehlt, der Requirements-Stamp fehlt oder `requirements.txt` neuer als der Stamp ist, bricht das Skript mit einem klaren Hinweis auf `bash scripts/bootstrap.sh` ab.
 Die Router-PID liegt stabil unter `~/.ai/run/router.pid`; das Script prueft ausserdem, ob diese PID wirklich zu `router.app` gehoert, bevor es einen zweiten Start blockiert oder beim Stoppen beendet.
 Vor dem Docker-Start prueft das Script ausserdem, ob `nvidia-smi` funktioniert und ob `/run/nvidia-persistenced/socket` vorhanden ist. Falls nicht, bekommst du einen klaren Hinweis statt eines spaeteren OCI-Fehlers.
 
