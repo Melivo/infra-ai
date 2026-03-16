@@ -39,7 +39,7 @@ The router controls:
 - request validation
 - routing modes and policies
 - provider selection
-- provider response normalization
+- provider response normalization into turn and execution-step state
 - tool-loop orchestration
 - provider error normalization
 - timeout policy

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from router.schemas import JSONValue
 from router.tools.types import ToolResult, ToolSpec
+
+if TYPE_CHECKING:
+    from router.conversation import ConversationTurn
 
 NormalizedRole = Literal["system", "user", "assistant", "tool"]
 
@@ -58,12 +61,22 @@ class GenerationRequest:
     top_p: float | None = None
     max_tokens: int | None = None
     metadata: dict[str, JSONValue] = field(default_factory=dict)
+    _provider_messages: tuple[NormalizedMessage, ...] | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
+
+    def to_provider_messages(self) -> list[NormalizedMessage]:
+        from router.conversation import turns_to_messages
+
+        if self._provider_messages is not None:
+            return list(self._provider_messages)
+        return turns_to_messages(self.turns)
 
     @property
     def messages(self) -> list[NormalizedMessage]:
-        from router.conversation import turns_to_messages
-
-        return turns_to_messages(self.turns)
+        return self.to_provider_messages()
 
     @classmethod
     def from_messages(
@@ -89,6 +102,7 @@ class GenerationRequest:
             top_p=top_p,
             max_tokens=max_tokens,
             metadata=dict(metadata or {}),
+            _provider_messages=tuple(messages),
         )
 
 

@@ -6,8 +6,10 @@ from http import HTTPStatus
 import json
 
 from router.conversation import (
-    ToolCallTurn,
     ConversationTurn,
+    ExecutionStep,
+    ToolCallTurn,
+    execution_steps_from_turns,
     tool_result_to_turn,
     turn_to_tool_call,
 )
@@ -69,11 +71,12 @@ class ToolLoopEngine:
         recent_call_signatures: list[str] = []
 
         while True:
-            current_request = replace(request, turns=list(turns))
+            current_request = replace(request, turns=list(turns), _provider_messages=None)
             provider_output = provider.generate(current_request)
             generation_turns = parse_provider_generation(provider_output)
             turns.extend(generation_turns)
-            tool_call_turns = _tool_call_turns(generation_turns)
+            current_step = _current_execution_step(generation_turns)
+            tool_call_turns = current_step.tool_calls if current_step is not None else []
             if not tool_call_turns:
                 return ToolLoopResult(
                     turns=list(turns),
@@ -237,3 +240,10 @@ def _tool_call_signature(name: str, arguments: dict[str, JSONValue]) -> str:
 
 def _tool_call_turns(turns: list[ConversationTurn]) -> list[ToolCallTurn]:
     return [turn for turn in turns if isinstance(turn, ToolCallTurn)]
+
+
+def _current_execution_step(turns: list[ConversationTurn]) -> ExecutionStep | None:
+    steps = execution_steps_from_turns(turns)
+    if not steps:
+        return None
+    return steps[-1]

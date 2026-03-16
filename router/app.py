@@ -11,7 +11,7 @@ from socket import timeout as SocketTimeout
 from typing import cast
 from uuid import uuid4
 
-from router.conversation import messages_to_turns, turns_to_generation
+from router.conversation import turns_to_generation
 from router.normalization import GenerationRequest, request_messages_from_payload
 from router.policies import (
     RoutingPolicyError,
@@ -341,8 +341,9 @@ class RouterApplication:
         provider_slot: str | None,
     ) -> GenerationRequest:
         request_id = f"req-{uuid4().hex}"
-        return GenerationRequest(
-            turns=messages_to_turns(request_messages_from_payload(payload)),
+        request_messages = request_messages_from_payload(payload)
+        return GenerationRequest.from_messages(
+            messages=request_messages,
             tools=self._resolve_request_tools(
                 allowed_tool_names=_allowed_tool_names(payload.get("allowed_tools")),
                 request_id=request_id,

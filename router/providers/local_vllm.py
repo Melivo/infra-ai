@@ -101,7 +101,7 @@ def _build_openai_chat_payload(
 ) -> dict[str, JSONValue]:
     payload: dict[str, JSONValue] = {
         "model": request.model or default_model,
-        "messages": [_normalized_message_to_openai(message) for message in request.messages],
+        "messages": [_normalized_message_to_openai(message) for message in request.to_provider_messages()],
     }
     if request.temperature is not None:
         payload["temperature"] = request.temperature
@@ -157,4 +157,3 @@ def _tool_spec_to_openai_tool(tool: ToolSpec) -> JSONValue:
             "parameters": tool.input_schema,
         },
     }
-

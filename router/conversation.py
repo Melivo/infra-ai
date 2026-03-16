@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Literal
+from typing import Literal, Protocol
 
 from router.normalization import NormalizedGeneration, NormalizedMessage, NormalizedToolCall
 from router.schemas import JSONValue
@@ -19,7 +19,7 @@ class TurnType(str, Enum):
     FINAL = "final"
 
 
-class ConversationTurn:
+class ConversationTurn(Protocol):
     type: TurnType
     metadata: dict[str, JSONValue]
 
@@ -72,9 +72,10 @@ class FinalTurn(ConversationTurn):
 
 
 @dataclass(frozen=True)
-class ConversationSegment:
-    assistant: AssistantTurn
+class ExecutionStep:
+    reasoning_turns: list[AssistantTurn] = field(default_factory=list)
     tool_calls: list[ToolCallTurn] = field(default_factory=list)
+    tool_results: list[ToolResultTurn] = field(default_factory=list)
     final: FinalTurn | None = None
 
 
@@ -156,52 +157,75 @@ def generation_to_turns(generation: NormalizedGeneration) -> list[ConversationTu
     return turns
 
 
-def segment_turns(turns: list[ConversationTurn]) -> list[ConversationSegment]:
-    """Group assistant-facing model output into explicit segments."""
-    segments: list[ConversationSegment] = []
-    current_segment: ConversationSegment | None = None
+def execution_steps_from_turns(turns: list[ConversationTurn]) -> list[ExecutionStep]:
+    """Group assistant output, planned tool calls and tool results into explicit execution steps."""
+    steps: list[ExecutionStep] = []
+    current_step: ExecutionStep | None = None
 
     for turn in turns:
         if isinstance(turn, AssistantTurn):
-            current_segment = ConversationSegment(assistant=turn)
-            segments.append(current_segment)
+            if (
+                current_step is not None
+                and not current_step.tool_calls
+                and not current_step.tool_results
+                and current_step.final is None
+            ):
+                current_step = replace(
+                    current_step,
+                    reasoning_turns=[*current_step.reasoning_turns, turn],
+                )
+                steps[-1] = current_step
+                continue
+            current_step = ExecutionStep(reasoning_turns=[turn])
+            steps.append(current_step)
             continue
-        if current_segment is None:
+        if current_step is None:
             continue
         if isinstance(turn, ToolCallTurn):
-            current_segment = replace(
-                current_segment,
-                tool_calls=[*current_segment.tool_calls, turn],
+            current_step = replace(
+                current_step,
+                tool_calls=[*current_step.tool_calls, turn],
             )
-            segments[-1] = current_segment
+            steps[-1] = current_step
+            continue
+        if isinstance(turn, ToolResultTurn):
+            current_step = replace(
+                current_step,
+                tool_results=[*current_step.tool_results, turn],
+            )
+            steps[-1] = current_step
             continue
         if isinstance(turn, FinalTurn):
-            current_segment = replace(current_segment, final=turn)
-            segments[-1] = current_segment
+            current_step = replace(current_step, final=turn)
+            steps[-1] = current_step
             continue
-        current_segment = None
+        current_step = None
 
-    return segments
+    return steps
 
 
 def turns_to_generation(turns: list[ConversationTurn]) -> NormalizedGeneration:
     """Compatibility mapping from primary conversation turns to API-facing generation shape."""
-    segments = segment_turns(turns)
-    if not segments:
-        raise ValueError("Conversation turns do not contain an assistant segment.")
+    steps = execution_steps_from_turns(turns)
+    if not steps:
+        raise ValueError("Conversation turns do not contain an assistant execution step.")
 
-    segment = segments[-1]
-    metadata_source = segment.final or segment.assistant
+    step = steps[-1]
+    if not step.reasoning_turns:
+        raise ValueError("Conversation execution step does not contain an assistant reasoning turn.")
+
+    assistant_turn = step.reasoning_turns[-1]
+    metadata_source = step.final or assistant_turn
     usage = metadata_source.metadata.get("usage")
     return NormalizedGeneration(
         message=NormalizedMessage(
             role="assistant",
-            content=segment.assistant.content,
-            content_json=segment.assistant.content_json,
-            tool_calls=[turn_to_tool_call(turn) for turn in segment.tool_calls],
-            metadata=dict(segment.assistant.metadata),
+            content=assistant_turn.content,
+            content_json=assistant_turn.content_json,
+            tool_calls=[turn_to_tool_call(turn) for turn in step.tool_calls],
+            metadata=dict(assistant_turn.metadata),
         ),
-        final=segment.final is not None,
+        final=step.final is not None,
         finish_reason=_metadata_str(metadata_source.metadata, "finish_reason"),
         response_id=_metadata_str(metadata_source.metadata, "response_id"),
         model=_metadata_str(metadata_source.metadata, "model"),

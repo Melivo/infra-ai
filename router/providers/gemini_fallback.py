@@ -75,7 +75,7 @@ def _build_gemini_payload(request: GenerationRequest) -> dict[str, JSONValue]:
     contents: list[JSONValue] = []
     system_texts: list[str] = []
 
-    for message in request.messages:
+    for message in request.to_provider_messages():
         text = _message_text(message)
         if message.role == "system":
             system_texts.append(text)

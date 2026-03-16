@@ -105,7 +105,7 @@ def _build_responses_payload(
 ) -> dict[str, JSONValue]:
     request_payload: dict[str, JSONValue] = {
         "model": model,
-        "input": _build_responses_input(request.messages),
+        "input": _build_responses_input(request.to_provider_messages()),
         "reasoning": {"effort": _REASONING_EFFORTS[slot]},
     }
     if request.tools:
@@ -173,4 +173,3 @@ def _tool_spec_to_responses_tool(tool: ToolSpec) -> JSONValue:
         "description": tool.description,
         "parameters": tool.input_schema,
     }
-
