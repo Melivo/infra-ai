@@ -227,7 +227,7 @@ Aktuell ist die Router-Integration bewusst klein, aber nicht mehr rein manuell:
 
 - `POST /v1/chat/completions` akzeptiert optional ein Feld `allowed_tools`
 - der Router normalisiert Modellantworten intern provider-unabhaengig, erkennt einzelne Tool-Calls und fuehrt sie kontrolliert aus
-- pro Modellschritt ist in V1 genau ein Tool-Call erlaubt
+- pro Modellschritt sind in V1 ein oder mehrere sequentielle Tool-Calls erlaubt
 - triviale Wiederholungen identischer Tool-Calls werden frueh abgebrochen
 - Tool-Ergebnisse werden als interne Tool-Nachrichten mit stabilem JSON-Pfad wieder in den Modellkontext eingespeist
 - der Loop bricht spaetestens nach `INFRA_AI_MAX_TOOL_STEPS` ab

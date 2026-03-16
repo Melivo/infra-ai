@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from enum import Enum
+from typing import Literal
 
 from router.normalization import NormalizedGeneration, NormalizedMessage, NormalizedToolCall
 from router.schemas import JSONValue
@@ -18,23 +19,69 @@ class TurnType(str, Enum):
     FINAL = "final"
 
 
-@dataclass(frozen=True)
 class ConversationTurn:
     type: TurnType
-    role: str | None = None
+    metadata: dict[str, JSONValue]
+
+
+@dataclass(frozen=True)
+class UserTurn(ConversationTurn):
+    role: Literal["system", "user"]
     content: str | None = None
     content_json: JSONValue | None = None
-    tool_name: str | None = None
-    tool_call_id: str | None = None
-    tool_arguments: dict[str, JSONValue] | None = None
     metadata: dict[str, JSONValue] = field(default_factory=dict)
+    type: TurnType = field(default=TurnType.USER, init=False)
+
+
+@dataclass(frozen=True)
+class AssistantTurn(ConversationTurn):
+    content: str | None = None
+    content_json: JSONValue | None = None
+    metadata: dict[str, JSONValue] = field(default_factory=dict)
+    role: Literal["assistant"] = field(default="assistant", init=False)
+    type: TurnType = field(default=TurnType.ASSISTANT, init=False)
+
+
+@dataclass(frozen=True)
+class ToolCallTurn(ConversationTurn):
+    tool_name: str
+    tool_call_id: str
+    tool_arguments: dict[str, JSONValue]
+    metadata: dict[str, JSONValue] = field(default_factory=dict)
+    type: TurnType = field(default=TurnType.TOOL_CALL, init=False)
+
+
+@dataclass(frozen=True)
+class ToolResultTurn(ConversationTurn):
+    tool_name: str | None
+    tool_call_id: str | None
+    content: str | None = None
+    content_json: JSONValue | None = None
+    metadata: dict[str, JSONValue] = field(default_factory=dict)
+    role: Literal["tool"] = field(default="tool", init=False)
+    type: TurnType = field(default=TurnType.TOOL_RESULT, init=False)
+
+
+@dataclass(frozen=True)
+class FinalTurn(ConversationTurn):
+    content: str | None = None
+    content_json: JSONValue | None = None
+    metadata: dict[str, JSONValue] = field(default_factory=dict)
+    role: Literal["assistant"] = field(default="assistant", init=False)
+    type: TurnType = field(default=TurnType.FINAL, init=False)
+
+
+@dataclass(frozen=True)
+class ConversationSegment:
+    assistant: AssistantTurn
+    tool_calls: list[ToolCallTurn] = field(default_factory=list)
+    final: FinalTurn | None = None
 
 
 def message_to_turns(message: NormalizedMessage) -> list[ConversationTurn]:
     if message.role in {"system", "user"}:
         return [
-            ConversationTurn(
-                type=TurnType.USER,
+            UserTurn(
                 role=message.role,
                 content=message.content,
                 content_json=message.content_json,
@@ -43,10 +90,8 @@ def message_to_turns(message: NormalizedMessage) -> list[ConversationTurn]:
         ]
 
     if message.role == "assistant":
-        turns = [
-            ConversationTurn(
-                type=TurnType.ASSISTANT,
-                role=message.role,
+        turns: list[ConversationTurn] = [
+            AssistantTurn(
                 content=message.content,
                 content_json=message.content_json,
                 metadata=dict(message.metadata),
@@ -58,9 +103,7 @@ def message_to_turns(message: NormalizedMessage) -> list[ConversationTurn]:
 
     if message.role == "tool":
         return [
-            ConversationTurn(
-                type=TurnType.TOOL_RESULT,
-                role=message.role,
+            ToolResultTurn(
                 content=message.content,
                 content_json=message.content_json,
                 tool_name=message.tool_name,
@@ -79,9 +122,8 @@ def messages_to_turns(messages: list[NormalizedMessage]) -> list[ConversationTur
     return turns
 
 
-def tool_call_to_turn(tool_call: NormalizedToolCall) -> ConversationTurn:
-    return ConversationTurn(
-        type=TurnType.TOOL_CALL,
+def tool_call_to_turn(tool_call: NormalizedToolCall) -> ToolCallTurn:
+    return ToolCallTurn(
         tool_name=tool_call.name,
         tool_call_id=tool_call.call_id,
         tool_arguments=dict(tool_call.arguments),
@@ -90,12 +132,12 @@ def tool_call_to_turn(tool_call: NormalizedToolCall) -> ConversationTurn:
 
 
 def turn_to_tool_call(turn: ConversationTurn) -> NormalizedToolCall:
-    if turn.type != TurnType.TOOL_CALL:
+    if not isinstance(turn, ToolCallTurn):
         raise ValueError(f"Expected a tool_call turn, got {turn.type!r}")
     return NormalizedToolCall(
-        call_id=turn.tool_call_id or "",
-        name=turn.tool_name or "",
-        arguments=dict(turn.tool_arguments or {}),
+        call_id=turn.tool_call_id,
+        name=turn.tool_name,
+        arguments=dict(turn.tool_arguments),
         metadata=dict(turn.metadata),
     )
 
@@ -105,9 +147,7 @@ def generation_to_turns(generation: NormalizedGeneration) -> list[ConversationTu
     turns = message_to_turns(generation.message)
     if generation.final:
         turns.append(
-            ConversationTurn(
-                type=TurnType.FINAL,
-                role="assistant",
+            FinalTurn(
                 content=generation.message.content,
                 content_json=generation.message.content_json,
                 metadata=_generation_metadata(generation),
@@ -116,38 +156,52 @@ def generation_to_turns(generation: NormalizedGeneration) -> list[ConversationTu
     return turns
 
 
-def turns_to_generation(turns: list[ConversationTurn]) -> NormalizedGeneration:
-    """Compatibility mapping from primary conversation turns to API-facing generation shape."""
-    assistant_turn: ConversationTurn | None = None
-    tool_call_turns: list[ConversationTurn] = []
-    final_turn: ConversationTurn | None = None
+def segment_turns(turns: list[ConversationTurn]) -> list[ConversationSegment]:
+    """Group assistant-facing model output into explicit segments."""
+    segments: list[ConversationSegment] = []
+    current_segment: ConversationSegment | None = None
 
     for turn in turns:
-        if turn.type == TurnType.ASSISTANT:
-            assistant_turn = turn
-            tool_call_turns = []
-            final_turn = None
+        if isinstance(turn, AssistantTurn):
+            current_segment = ConversationSegment(assistant=turn)
+            segments.append(current_segment)
             continue
-        if turn.type == TurnType.TOOL_CALL and assistant_turn is not None and final_turn is None:
-            tool_call_turns.append(turn)
+        if current_segment is None:
             continue
-        if turn.type == TurnType.FINAL and assistant_turn is not None:
-            final_turn = turn
+        if isinstance(turn, ToolCallTurn):
+            current_segment = replace(
+                current_segment,
+                tool_calls=[*current_segment.tool_calls, turn],
+            )
+            segments[-1] = current_segment
+            continue
+        if isinstance(turn, FinalTurn):
+            current_segment = replace(current_segment, final=turn)
+            segments[-1] = current_segment
+            continue
+        current_segment = None
 
-    if assistant_turn is None:
-        raise ValueError("Conversation turns do not contain an assistant turn.")
+    return segments
 
-    metadata_source = final_turn or assistant_turn
+
+def turns_to_generation(turns: list[ConversationTurn]) -> NormalizedGeneration:
+    """Compatibility mapping from primary conversation turns to API-facing generation shape."""
+    segments = segment_turns(turns)
+    if not segments:
+        raise ValueError("Conversation turns do not contain an assistant segment.")
+
+    segment = segments[-1]
+    metadata_source = segment.final or segment.assistant
     usage = metadata_source.metadata.get("usage")
     return NormalizedGeneration(
         message=NormalizedMessage(
             role="assistant",
-            content=assistant_turn.content,
-            content_json=assistant_turn.content_json,
-            tool_calls=[turn_to_tool_call(turn) for turn in tool_call_turns],
-            metadata=dict(assistant_turn.metadata),
+            content=segment.assistant.content,
+            content_json=segment.assistant.content_json,
+            tool_calls=[turn_to_tool_call(turn) for turn in segment.tool_calls],
+            metadata=dict(segment.assistant.metadata),
         ),
-        final=final_turn is not None,
+        final=segment.final is not None,
         finish_reason=_metadata_str(metadata_source.metadata, "finish_reason"),
         response_id=_metadata_str(metadata_source.metadata, "response_id"),
         model=_metadata_str(metadata_source.metadata, "model"),
@@ -159,38 +213,44 @@ def turns_to_generation(turns: list[ConversationTurn]) -> NormalizedGeneration:
 
 
 def turn_to_message(turn: ConversationTurn) -> NormalizedMessage:
-    if turn.type == TurnType.USER:
-        role = turn.role if turn.role in {"system", "user"} else "user"
+    if isinstance(turn, UserTurn):
         return NormalizedMessage(
-            role=role,
+            role=turn.role,
             content=turn.content,
             content_json=turn.content_json,
             metadata=dict(turn.metadata),
         )
 
-    if turn.type in {TurnType.ASSISTANT, TurnType.FINAL}:
-        role = turn.role if turn.role == "assistant" else "assistant"
+    if isinstance(turn, AssistantTurn):
         return NormalizedMessage(
-            role=role,
+            role="assistant",
             content=turn.content,
             content_json=turn.content_json,
             metadata=dict(turn.metadata),
         )
 
-    if turn.type == TurnType.TOOL_CALL:
+    if isinstance(turn, FinalTurn):
+        return NormalizedMessage(
+            role="assistant",
+            content=turn.content,
+            content_json=turn.content_json,
+            metadata=dict(turn.metadata),
+        )
+
+    if isinstance(turn, ToolCallTurn):
         return NormalizedMessage(
             role="assistant",
             tool_calls=[
                 NormalizedToolCall(
-                    call_id=turn.tool_call_id or "",
-                    name=turn.tool_name or "",
-                    arguments=dict(turn.tool_arguments or {}),
+                    call_id=turn.tool_call_id,
+                    name=turn.tool_name,
+                    arguments=dict(turn.tool_arguments),
                     metadata=dict(turn.metadata),
                 )
             ],
         )
 
-    if turn.type == TurnType.TOOL_RESULT:
+    if isinstance(turn, ToolResultTurn):
         return NormalizedMessage(
             role="tool",
             content=turn.content,
@@ -200,7 +260,7 @@ def turn_to_message(turn: ConversationTurn) -> NormalizedMessage:
             metadata=dict(turn.metadata),
         )
 
-    raise ValueError(f"Unsupported conversation turn type: {turn.type!r}")
+    raise ValueError(f"Unsupported conversation turn type: {turn!r}")
 
 
 def turns_to_messages(
@@ -219,9 +279,8 @@ def turns_to_messages(
         pending_assistant = None
 
     for turn in turns:
-        if turn.type == TurnType.TOOL_CALL:
-            tool_call_message = turn_to_message(turn)
-            tool_call = tool_call_message.tool_calls[0]
+        if isinstance(turn, ToolCallTurn):
+            tool_call = turn_to_tool_call(turn)
             if pending_assistant is None:
                 pending_assistant = NormalizedMessage(role="assistant", tool_calls=[tool_call])
             else:
@@ -232,9 +291,9 @@ def turns_to_messages(
             continue
 
         flush_pending_assistant()
-        if turn.type == TurnType.FINAL and not include_final:
+        if isinstance(turn, FinalTurn) and not include_final:
             continue
-        if turn.type == TurnType.ASSISTANT:
+        if isinstance(turn, AssistantTurn):
             pending_assistant = turn_to_message(turn)
             continue
         messages.append(turn_to_message(turn))
@@ -243,10 +302,8 @@ def turns_to_messages(
     return messages
 
 
-def tool_result_to_turn(result: ToolResult) -> ConversationTurn:
-    return ConversationTurn(
-        type=TurnType.TOOL_RESULT,
-        role="tool",
+def tool_result_to_turn(result: ToolResult) -> ToolResultTurn:
+    return ToolResultTurn(
         content=result.output_text if result.output_json is not None else _tool_result_text(result),
         content_json=result.output_json,
         tool_name=result.name,

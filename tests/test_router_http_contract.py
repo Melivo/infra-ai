@@ -603,6 +603,58 @@ class RouterHTTPContractTests(unittest.TestCase):
         self.assertEqual(second_request.messages[-1].role, "tool")
         self.assertEqual(second_request.messages[-1].content_json, {"message": "hello"})
 
+    def test_multiple_model_tool_calls_are_executed_sequentially_and_reinjected(self) -> None:
+        app, providers = self.make_app(build_config())
+        providers["local_vllm"] = StubProvider(
+            "local_vllm",
+            generations=[
+                NormalizedGeneration(
+                    message=NormalizedMessage(
+                        role="assistant",
+                        tool_calls=[
+                            NormalizedToolCall(
+                                call_id="call-1",
+                                name="echo",
+                                arguments={"message": "hello"},
+                            ),
+                            NormalizedToolCall(
+                                call_id="call-2",
+                                name="add_numbers",
+                                arguments={"a": 2, "b": 3},
+                            ),
+                        ],
+                    ),
+                    final=False,
+                    finish_reason="tool_calls",
+                    response_id="step-1",
+                    provider_name="local_vllm",
+                ),
+                NormalizedGeneration(
+                    message=NormalizedMessage(role="assistant", content="done"),
+                    final=True,
+                    finish_reason="stop",
+                    response_id="step-2",
+                    provider_name="local_vllm",
+                ),
+            ],
+        )
+
+        status_code, _, payload = perform_json_request(
+            app,
+            method="POST",
+            path="/v1/chat/completions",
+            body=build_payload(allowed_tools=["echo", "add_numbers"]),
+        )
+
+        self.assertEqual(status_code, 200)
+        self.assertEqual(payload["choices"][0]["message"]["content"], "done")
+        self.assertEqual(payload["tool_steps"], 2)
+        second_request = providers["local_vllm"].request_history[1]
+        self.assertEqual(second_request.messages[-3].role, "assistant")
+        self.assertEqual([tool_call.name for tool_call in second_request.messages[-3].tool_calls], ["echo", "add_numbers"])
+        self.assertEqual(second_request.messages[-2].content_json, {"message": "hello"})
+        self.assertEqual(second_request.messages[-1].content_json, {"sum": 5, "a": 2, "b": 3})
+
     def test_unknown_model_tool_call_returns_not_found(self) -> None:
         app, providers = self.make_app(build_config())
         providers["local_vllm"] = StubProvider(
@@ -736,6 +788,36 @@ class RouterHTTPContractTests(unittest.TestCase):
 
         self.assertEqual(status_code, 409)
         self.assert_error_payload(payload, error_type="max_tool_steps_exceeded")
+
+    def test_max_tool_steps_blocks_multi_tool_step_before_partial_execution(self) -> None:
+        app, providers = self.make_app(build_config(max_tool_steps=1))
+        providers["local_vllm"] = StubProvider(
+            "local_vllm",
+            generations=[
+                NormalizedGeneration(
+                    message=NormalizedMessage(
+                        role="assistant",
+                        tool_calls=[
+                            NormalizedToolCall(call_id="call-1", name="echo", arguments={"message": "1"}),
+                            NormalizedToolCall(call_id="call-2", name="echo", arguments={"message": "2"}),
+                        ],
+                    ),
+                    final=False,
+                    provider_name="local_vllm",
+                )
+            ],
+        )
+
+        status_code, _, payload = perform_json_request(
+            app,
+            method="POST",
+            path="/v1/chat/completions",
+            body=build_payload(allowed_tools=["echo"]),
+        )
+
+        self.assertEqual(status_code, 409)
+        self.assert_error_payload(payload, error_type="max_tool_steps_exceeded")
+        self.assertEqual(len(providers["local_vllm"].request_history), 1)
 
     def test_invalid_tool_arguments_return_consistent_error(self) -> None:
         app, providers = self.make_app(build_config())

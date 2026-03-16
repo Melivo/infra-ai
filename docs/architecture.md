@@ -79,6 +79,5 @@ Providers do not define the public platform contract on their own. The router do
 - RAG or project context
 - workflow automation
 - parallel tool calls
-- multiple tool calls in one model step
 - IDE integration
 - browser companion

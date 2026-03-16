@@ -126,6 +126,44 @@ class ProviderOutputParserTests(unittest.TestCase):
         self.assertEqual(turns[1].tool_name, "echo")
         self.assertEqual(turns[1].tool_arguments, {"message": "hi"})
 
+    def test_parse_openai_chat_multiple_tool_calls_preserves_all_turns(self) -> None:
+        turns = parse_provider_generation(
+            ProviderOutput(
+                format="openai_chat_completion",
+                body={
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "tool_calls": [
+                                    {
+                                        "id": "call-1",
+                                        "function": {
+                                            "name": "echo",
+                                            "arguments": "{\"message\": \"hi\"}",
+                                        },
+                                    },
+                                    {
+                                        "id": "call-2",
+                                        "function": {
+                                            "name": "add_numbers",
+                                            "arguments": "{\"a\": 2, \"b\": 3}",
+                                        },
+                                    },
+                                ],
+                            },
+                            "finish_reason": "tool_calls",
+                        }
+                    ]
+                },
+                provider_name="local_vllm",
+                fallback_model="Qwen",
+            )
+        )
+
+        self.assertEqual([turn.type.value for turn in turns], ["assistant", "tool_call", "tool_call"])
+        self.assertEqual([turn.tool_name for turn in turns[1:]], ["echo", "add_numbers"])
+
     def test_parser_turns_rebuild_public_response_shape_via_compat_boundary(self) -> None:
         generation = turns_to_generation(
             parse_provider_generation(

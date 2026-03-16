@@ -11,7 +11,7 @@ from socket import timeout as SocketTimeout
 from typing import cast
 from uuid import uuid4
 
-from router.conversation import turns_to_generation
+from router.conversation import messages_to_turns, turns_to_generation
 from router.normalization import GenerationRequest, request_messages_from_payload
 from router.policies import (
     RoutingPolicyError,
@@ -180,7 +180,8 @@ class RouterApplication:
                     "implemented": True,
                     "max_tool_steps": self.config.max_tool_steps,
                     "tool_timeout_s": self.config.tool_timeout_s,
-                    "single_tool_call_per_step": True,
+                    "single_tool_call_per_step": False,
+                    "multiple_tool_calls_per_step": True,
                     "parallel_tool_calls": False,
                 },
                 "tools": [
@@ -199,7 +200,6 @@ class RouterApplication:
                     "automatic provider selection beyond auto -> local",
                     "openai_realtime router execution path",
                     "openai_agent orchestration layer",
-                    "multiple tool calls per model step",
                     "parallel tool calls",
                     "gemini native tool-call translation",
                     "agents and MCP integration",
@@ -342,7 +342,7 @@ class RouterApplication:
     ) -> GenerationRequest:
         request_id = f"req-{uuid4().hex}"
         return GenerationRequest(
-            messages=request_messages_from_payload(payload),
+            turns=messages_to_turns(request_messages_from_payload(payload)),
             tools=self._resolve_request_tools(
                 allowed_tool_names=_allowed_tool_names(payload.get("allowed_tools")),
                 request_id=request_id,

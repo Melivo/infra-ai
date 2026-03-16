@@ -50,7 +50,7 @@ class NormalizedGeneration:
 
 @dataclass(frozen=True)
 class GenerationRequest:
-    messages: list[NormalizedMessage]
+    turns: list["ConversationTurn"]
     tools: list[ToolSpec]
     model: str | None = None
     provider_slot: str | None = None
@@ -58,6 +58,38 @@ class GenerationRequest:
     top_p: float | None = None
     max_tokens: int | None = None
     metadata: dict[str, JSONValue] = field(default_factory=dict)
+
+    @property
+    def messages(self) -> list[NormalizedMessage]:
+        from router.conversation import turns_to_messages
+
+        return turns_to_messages(self.turns)
+
+    @classmethod
+    def from_messages(
+        cls,
+        *,
+        messages: list[NormalizedMessage],
+        tools: list[ToolSpec],
+        model: str | None = None,
+        provider_slot: str | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        max_tokens: int | None = None,
+        metadata: dict[str, JSONValue] | None = None,
+    ) -> "GenerationRequest":
+        from router.conversation import messages_to_turns
+
+        return cls(
+            turns=messages_to_turns(messages),
+            tools=tools,
+            model=model,
+            provider_slot=provider_slot,
+            temperature=temperature,
+            top_p=top_p,
+            max_tokens=max_tokens,
+            metadata=dict(metadata or {}),
+        )
 
 
 def extract_text_content(content: JSONValue) -> str:

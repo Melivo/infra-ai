@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from router.conversation import ConversationTurn, TurnType
+from router.conversation import AssistantTurn, ConversationTurn, FinalTurn, ToolCallTurn
 from router.schemas import JSONValue
 
 from router.provider_output.types import ProviderOutput
@@ -163,9 +163,7 @@ def _assistant_turns(
     tool_call_turns: list[ConversationTurn],
 ) -> list[ConversationTurn]:
     turns = [
-        ConversationTurn(
-            type=TurnType.ASSISTANT,
-            role="assistant",
+        AssistantTurn(
             content=content,
             metadata=dict(metadata),
         )
@@ -173,9 +171,7 @@ def _assistant_turns(
     turns.extend(tool_call_turns)
     if not tool_call_turns:
         turns.append(
-            ConversationTurn(
-                type=TurnType.FINAL,
-                role="assistant",
+            FinalTurn(
                 content=content,
                 metadata=dict(metadata),
             )
@@ -227,10 +223,9 @@ def _extract_openai_tool_call_turns(tool_calls_payload: JSONValue) -> list[Conve
             missing_name_message="OpenAI-compatible provider returned a tool call without a name.",
         )
         turns.append(
-            ConversationTurn(
-                type=TurnType.TOOL_CALL,
-                tool_call_id=call_id,
+            ToolCallTurn(
                 tool_name=name,
+                tool_call_id=call_id,
                 tool_arguments=arguments,
             )
         )
@@ -254,10 +249,9 @@ def _extract_openai_responses_tool_call_turns(output: JSONValue) -> list[Convers
             malformed_message="OpenAI Responses returned a malformed function call.",
         )
         tool_call_turns.append(
-            ConversationTurn(
-                type=TurnType.TOOL_CALL,
-                tool_call_id=call_id,
+            ToolCallTurn(
                 tool_name=name,
+                tool_call_id=call_id,
                 tool_arguments=arguments,
             )
         )

@@ -41,7 +41,7 @@ Der bisherige explizite Debug-Pfad ueber `tool_call` in `POST /v1/chat/completio
 V1 unterstuetzt:
 
 - provider-unabhaengige Normalisierung von Modellantworten
-- automatische Erkennung genau eines Tool-Calls pro Modellschritt
+- automatische Erkennung von einem oder mehreren Tool-Calls pro Modellschritt
 - Allowlist-Nutzung ueber `allowed_tools`
 - Policy- und Schema-Validierung vor der Tool-Ausfuehrung
 - kleine Wiederholungserkennung fuer identische Tool-Calls ohne Fortschritt
@@ -51,7 +51,6 @@ V1 unterstuetzt:
 
 V1 unterstuetzt bewusst noch nicht:
 
-- mehrere Tool-Calls in einem Modellschritt
 - parallele Tool-Calls
 - persistente Agent-Memory
 - MCP

@@ -3,13 +3,19 @@ from __future__ import annotations
 import unittest
 
 from router.conversation import (
-    ConversationTurn,
+    AssistantTurn,
+    FinalTurn,
+    ToolCallTurn,
+    ToolResultTurn,
     TurnType,
+    UserTurn,
     generation_to_turns,
     messages_to_turns,
+    segment_turns,
+    turns_to_generation,
     turns_to_messages,
 )
-from router.normalization import NormalizedGeneration, NormalizedMessage, NormalizedToolCall
+from router.normalization import GenerationRequest, NormalizedGeneration, NormalizedMessage, NormalizedToolCall
 
 
 class ConversationTurnsTests(unittest.TestCase):
@@ -57,24 +63,21 @@ class ConversationTurnsTests(unittest.TestCase):
 
     def test_turns_to_messages_rebuild_provider_visible_messages(self) -> None:
         turns = [
-            ConversationTurn(type=TurnType.USER, role="system", content="Be concise."),
-            ConversationTurn(type=TurnType.USER, role="user", content="sum this"),
-            ConversationTurn(type=TurnType.ASSISTANT, role="assistant", content="Calling a tool."),
-            ConversationTurn(
-                type=TurnType.TOOL_CALL,
+            UserTurn(role="system", content="Be concise."),
+            UserTurn(role="user", content="sum this"),
+            AssistantTurn(content="Calling a tool."),
+            ToolCallTurn(
                 tool_name="add_numbers",
                 tool_call_id="call-1",
                 tool_arguments={"a": 2, "b": 3},
             ),
-            ConversationTurn(
-                type=TurnType.TOOL_RESULT,
-                role="tool",
+            ToolResultTurn(
                 content_json={"result": 5},
                 tool_name="add_numbers",
                 tool_call_id="call-1",
                 metadata={"ok": True},
             ),
-            ConversationTurn(type=TurnType.FINAL, role="assistant", content="done"),
+            FinalTurn(content="done"),
         ]
 
         messages = turns_to_messages(turns)
@@ -114,6 +117,35 @@ class ConversationTurnsTests(unittest.TestCase):
         self.assertEqual(turns[1].metadata["finish_reason"], "stop")
         self.assertEqual(turns[1].metadata["response_id"], "resp-1")
         self.assertEqual(turns[1].metadata["provider_name"], "provider-test")
+
+    def test_turns_to_generation_uses_latest_assistant_segment(self) -> None:
+        turns = [
+            UserTurn(role="user", content="plan something"),
+            AssistantTurn(content="thinking"),
+            AssistantTurn(content="calling tools"),
+            ToolCallTurn(tool_name="echo", tool_call_id="call-1", tool_arguments={"message": "hi"}),
+            ToolCallTurn(tool_name="add_numbers", tool_call_id="call-2", tool_arguments={"a": 2, "b": 3}),
+        ]
+
+        segments = segment_turns(turns)
+        generation = turns_to_generation(turns)
+
+        self.assertEqual(len(segments), 2)
+        self.assertEqual(segments[-1].assistant.content, "calling tools")
+        self.assertEqual(len(segments[-1].tool_calls), 2)
+        self.assertEqual(generation.message.content, "calling tools")
+        self.assertEqual([tool_call.name for tool_call in generation.message.tool_calls], ["echo", "add_numbers"])
+
+    def test_generation_request_uses_turns_as_primary_internal_state(self) -> None:
+        request = GenerationRequest.from_messages(
+            messages=[NormalizedMessage(role="user", content="hi")],
+            tools=[],
+            metadata={"request_id": "req-1"},
+        )
+
+        self.assertEqual([turn.type for turn in request.turns], [TurnType.USER])
+        self.assertEqual(request.messages[0].role, "user")
+        self.assertEqual(request.messages[0].content, "hi")
 
 
 if __name__ == "__main__":

@@ -6,12 +6,10 @@ from http import HTTPStatus
 import json
 
 from router.conversation import (
+    ToolCallTurn,
     ConversationTurn,
-    TurnType,
-    messages_to_turns,
     tool_result_to_turn,
     turn_to_tool_call,
-    turns_to_messages,
 )
 from router.normalization import GenerationRequest, NormalizedToolCall
 from router.provider_output import parse_provider_generation
@@ -66,12 +64,12 @@ class ToolLoopEngine:
         request_id: str,
         allowed_tools: set[str] | None,
     ) -> ToolLoopResult:
-        turns = messages_to_turns(request.messages)
+        turns = list(request.turns)
         tool_steps = 0
         recent_call_signatures: list[str] = []
 
         while True:
-            current_request = replace(request, messages=turns_to_messages(turns))
+            current_request = replace(request, turns=list(turns))
             provider_output = provider.generate(current_request)
             generation_turns = parse_provider_generation(provider_output)
             turns.extend(generation_turns)
@@ -82,47 +80,45 @@ class ToolLoopEngine:
                     tool_steps=tool_steps,
                 )
 
-            if len(tool_call_turns) != 1:
-                raise ToolLoopError(
-                    HTTPStatus.BAD_GATEWAY,
-                    "invalid_model_tool_call",
-                    "Model returned more than one tool call in a single step.",
-                )
-
-            if tool_steps >= self._max_tool_steps:
+            if tool_steps + len(tool_call_turns) > self._max_tool_steps:
                 raise ToolLoopError(
                     HTTPStatus.CONFLICT,
                     "max_tool_steps_exceeded",
                     f"Model requested more than {self._max_tool_steps} tool steps.",
                 )
 
-            tool_call_turn = tool_call_turns[0]
-            tool_call = turn_to_tool_call(tool_call_turn)
-            self._validate_model_tool_call(tool_call)
-            tool_call_signature = _tool_call_signature(tool_call.name, tool_call.arguments)
-            if tool_call_signature in recent_call_signatures:
-                raise ToolLoopError(
-                    HTTPStatus.CONFLICT,
-                    "tool_loop_repeated_call_detected",
-                    f"Model repeated the same tool call for {tool_call.name} without making progress.",
-                )
+            prepared_calls: list[tuple[NormalizedToolCall, str]] = []
+            step_signatures: set[str] = set()
+            for tool_call_turn in tool_call_turns:
+                tool_call = turn_to_tool_call(tool_call_turn)
+                self._validate_model_tool_call(tool_call)
+                tool_call_signature = _tool_call_signature(tool_call.name, tool_call.arguments)
+                if tool_call_signature in recent_call_signatures or tool_call_signature in step_signatures:
+                    raise ToolLoopError(
+                        HTTPStatus.CONFLICT,
+                        "tool_loop_repeated_call_detected",
+                        f"Model repeated the same tool call for {tool_call.name} without making progress.",
+                    )
+                prepared_calls.append((tool_call, tool_call_signature))
+                step_signatures.add(tool_call_signature)
 
-            result = await self._run_tool_call(
-                tool_call=ToolCall(
-                    call_id=tool_call.call_id,
-                    name=tool_call.name,
-                    arguments=tool_call.arguments,
-                ),
-                request_id=request_id,
-                current_tool_step=tool_steps,
-                allowed_tools=allowed_tools,
-            )
-            tool_steps += 1
-            recent_call_signatures = [
-                *recent_call_signatures[-(self._REPEATED_CALL_WINDOW - 1) :],
-                tool_call_signature,
-            ]
-            turns.append(tool_result_to_turn(result))
+            for tool_call, tool_call_signature in prepared_calls:
+                result = await self._run_tool_call(
+                    tool_call=ToolCall(
+                        call_id=tool_call.call_id,
+                        name=tool_call.name,
+                        arguments=tool_call.arguments,
+                    ),
+                    request_id=request_id,
+                    current_tool_step=tool_steps,
+                    allowed_tools=allowed_tools,
+                )
+                tool_steps += 1
+                recent_call_signatures = [
+                    *recent_call_signatures[-(self._REPEATED_CALL_WINDOW - 1) :],
+                    tool_call_signature,
+                ]
+                turns.append(tool_result_to_turn(result))
 
     async def run_tool_call(
         self,
@@ -239,5 +235,5 @@ def _tool_call_signature(name: str, arguments: dict[str, JSONValue]) -> str:
     return f"{name}:{json.dumps(arguments, sort_keys=True, separators=(',', ':'))}"
 
 
-def _tool_call_turns(turns: list[ConversationTurn]) -> list[ConversationTurn]:
-    return [turn for turn in turns if turn.type == TurnType.TOOL_CALL]
+def _tool_call_turns(turns: list[ConversationTurn]) -> list[ToolCallTurn]:
+    return [turn for turn in turns if isinstance(turn, ToolCallTurn)]
