@@ -7,9 +7,11 @@ import json
 
 from router.conversation import (
     ConversationTurn,
+    ExecutionNodeStatus,
     ExecutionStep,
     apply_tool_result_to_step,
     execution_steps_from_turns,
+    next_executable_plan_nodes,
     tool_result_to_turn,
     turn_to_tool_call,
 )
@@ -79,19 +81,15 @@ class ToolLoopEngine:
             turns.extend(parsed_step.turns)
             steps.append(parsed_step.step)
             current_step = parsed_step.step
-            tool_call_turns = (
-                [node.tool_call for node in current_step.plan.nodes]
-                if current_step is not None
-                else []
-            )
-            if not tool_call_turns:
+            planned_nodes = [node for node in current_step.plan.nodes if node.status == ExecutionNodeStatus.PLANNED]
+            if not planned_nodes:
                 return ToolLoopResult(
                     turns=list(turns),
                     steps=list(steps),
                     tool_steps=tool_steps,
                 )
 
-            if tool_steps + len(tool_call_turns) > self._max_tool_steps:
+            if tool_steps + len(planned_nodes) > self._max_tool_steps:
                 raise ToolLoopError(
                     HTTPStatus.CONFLICT,
                     "max_tool_steps_exceeded",
@@ -100,8 +98,8 @@ class ToolLoopEngine:
 
             prepared_calls: list[tuple[NormalizedToolCall, str]] = []
             step_signatures: set[str] = set()
-            for tool_call_turn in tool_call_turns:
-                tool_call = turn_to_tool_call(tool_call_turn)
+            for node in planned_nodes:
+                tool_call = turn_to_tool_call(node.tool_call)
                 self._validate_model_tool_call(tool_call)
                 tool_call_signature = _tool_call_signature(tool_call.name, tool_call.arguments)
                 if tool_call_signature in recent_call_signatures or tool_call_signature in step_signatures:
@@ -113,7 +111,13 @@ class ToolLoopEngine:
                 prepared_calls.append((tool_call, tool_call_signature))
                 step_signatures.add(tool_call_signature)
 
-            for tool_call, tool_call_signature in prepared_calls:
+            while True:
+                executable_nodes = next_executable_plan_nodes(steps[-1].plan)
+                if not executable_nodes:
+                    break
+                executable_node = executable_nodes[0]
+                tool_call = turn_to_tool_call(executable_node.tool_call)
+                tool_call_signature = _tool_call_signature(tool_call.name, tool_call.arguments)
                 result = await self._run_tool_call(
                     tool_call=ToolCall(
                         call_id=tool_call.call_id,

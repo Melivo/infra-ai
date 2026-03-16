@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import unittest
 
-from router.conversation import ExecutionNodeStatus, StepPhase, turns_to_generation
+from router.conversation import ExecutionDependencyOrigin, ExecutionNodeStatus, StepPhase, turns_to_generation
 from router.provider_output import ProviderOutput, parse_provider_generation, parse_provider_step
 from router.providers.base import ProviderError
 
 
 class ProviderOutputParserTests(unittest.TestCase):
     def test_parse_openai_chat_assistant_message_into_turns(self) -> None:
-        turns = parse_provider_generation(
+        parsed = parse_provider_step(
             ProviderOutput(
                 format="openai_chat_completion",
                 body={
@@ -29,6 +29,7 @@ class ProviderOutputParserTests(unittest.TestCase):
                 fallback_model="Qwen",
             )
         )
+        turns = parsed.turns
 
         self.assertEqual([turn.type.value for turn in turns], ["assistant", "final"])
         self.assertEqual(turns[0].content, "hello from vllm")
@@ -131,7 +132,7 @@ class ProviderOutputParserTests(unittest.TestCase):
         self.assertEqual(turns[1].tool_arguments, {"message": "hi"})
 
     def test_parse_openai_chat_multiple_tool_calls_preserves_all_turns(self) -> None:
-        turns = parse_provider_generation(
+        parsed = parse_provider_step(
             ProviderOutput(
                 format="openai_chat_completion",
                 body={
@@ -164,9 +165,11 @@ class ProviderOutputParserTests(unittest.TestCase):
                 fallback_model="Qwen",
             )
         )
+        turns = parsed.turns
 
         self.assertEqual([turn.type.value for turn in turns], ["assistant", "tool_call", "tool_call"])
         self.assertEqual([turn.tool_name for turn in turns[1:]], ["echo", "add_numbers"])
+        self.assertEqual(parsed.step.plan.nodes[1].dependencies[0].origin, ExecutionDependencyOrigin.EXECUTION_STRATEGY)
 
     def test_parser_turns_rebuild_public_response_shape_via_compat_boundary(self) -> None:
         generation = turns_to_generation(

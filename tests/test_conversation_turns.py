@@ -4,6 +4,7 @@ import unittest
 
 from router.conversation import (
     AssistantTurn,
+    ExecutionDependencyOrigin,
     ExecutionNodeStatus,
     ExecutionPlanNode,
     ExecutionStep,
@@ -18,6 +19,7 @@ from router.conversation import (
     execution_steps_from_turns,
     generation_to_turns,
     messages_to_turns,
+    next_executable_plan_nodes,
     turns_to_generation,
     turns_to_messages,
 )
@@ -147,6 +149,7 @@ class ConversationTurnsTests(unittest.TestCase):
         self.assertIsInstance(steps[-1].plan.nodes[0], ExecutionPlanNode)
         self.assertEqual(steps[-1].plan.nodes[0].depends_on_call_ids, [])
         self.assertEqual(steps[-1].plan.nodes[1].depends_on_call_ids, ["call-1"])
+        self.assertEqual(steps[-1].plan.nodes[1].dependencies[0].origin, ExecutionDependencyOrigin.EXECUTION_STRATEGY)
         self.assertEqual(generation.message.content, "calling tools")
         self.assertEqual([tool_call.name for tool_call in generation.message.tool_calls], ["echo", "add_numbers"])
 
@@ -211,6 +214,24 @@ class ConversationTurnsTests(unittest.TestCase):
         self.assertEqual(updated.plan.nodes[0].status, ExecutionNodeStatus.COMPLETED)
         self.assertEqual(updated.plan.nodes[0].result.content_json, {"message": "hi"})
         self.assertEqual(updated.plan.nodes[1].status, ExecutionNodeStatus.PLANNED)
+
+    def test_next_executable_plan_nodes_follow_dependency_and_node_state(self) -> None:
+        plan = build_execution_plan(
+            [
+                ToolCallTurn(tool_name="echo", tool_call_id="call-1", tool_arguments={"message": "hi"}),
+                ToolCallTurn(tool_name="add_numbers", tool_call_id="call-2", tool_arguments={"a": 2, "b": 3}),
+            ]
+        )
+
+        first_nodes = next_executable_plan_nodes(plan)
+        updated_step = apply_tool_result_to_step(
+            ExecutionStep(plan=plan),
+            ToolResultTurn(tool_name="echo", tool_call_id="call-1", content_json={"message": "hi"}),
+        )
+        second_nodes = next_executable_plan_nodes(updated_step.plan)
+
+        self.assertEqual([node.tool_call.tool_call_id for node in first_nodes], ["call-1"])
+        self.assertEqual([node.tool_call.tool_call_id for node in second_nodes], ["call-2"])
 
 
 if __name__ == "__main__":

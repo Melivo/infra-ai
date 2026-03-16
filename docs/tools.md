@@ -64,7 +64,7 @@ V1 unterstuetzt bewusst noch nicht:
 - spezialisierte Turn-Typen (`UserTurn`, `AssistantTurn`, `ToolCallTurn`, `ToolResultTurn`, `FinalTurn`) bilden die internen Rollen explizit statt ueber ein einzelnes ueberladenes Datamodell.
 - `ExecutionStep` ist die autoritative Orchestrierungseinheit pro Modellschritt. Sie haelt explizit Reasoning-, Planning-, Refinement- und Finalization-Turns sowie den aktuellen `ExecutionPlan`.
 - `AssistantTurn.phase` unterscheidet explizit `reasoning`, `tool_plan`, `refinement` und `finalization`; diese Phase wird an der Provider-Boundary moeglichst direkt gesetzt statt spaeter global erraten.
-- `ExecutionPlan` haelt die geplanten Tool-Calls eines Steps als explizite Knotenliste mit Strategie, Abhaengigkeiten und Ausfuehrungsstatus. Tool-Resultate werden an Plan-Knoten angehaengt, statt nur lose als zweite Liste nebenher zu laufen.
+- `ExecutionPlan` haelt die geplanten Tool-Calls eines Steps als explizite Knotenliste mit Strategie, Abhaengigkeiten, Knotenstatus und Ergebnisbezug. Abhaengigkeiten tragen bereits einen Ursprung (`declared` vs. `execution_strategy`), auch wenn V1 aktuell nur die sequentielle Strategiekette nutzt.
 - `NormalizedMessage`, `NormalizedToolCall` und `NormalizedGeneration` bleiben als Kompatibilitaets- und API-Schicht bestehen, z. B. fuer Provider-Request-Serialisierung und den stabilen HTTP-Response-Contract.
 - `GenerationRequest` haelt intern Turns und stellt Provider-Input explizit ueber `to_provider_messages()` bereit.
 - Fuer Tool-Result-Nachrichten ist `content_json` das interne Primaerformat; Provider-Adapter serialisieren strukturierte Inhalte erst an ihrer jeweiligen Grenze in Text.

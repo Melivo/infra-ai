@@ -30,6 +30,11 @@ class ExecutionStrategy(str, Enum):
     SEQUENTIAL = "sequential"
 
 
+class ExecutionDependencyOrigin(str, Enum):
+    DECLARED = "declared"
+    EXECUTION_STRATEGY = "execution_strategy"
+
+
 class ExecutionNodeStatus(str, Enum):
     PLANNED = "planned"
     COMPLETED = "completed"
@@ -89,16 +94,25 @@ class FinalTurn(ConversationTurn):
 
 
 @dataclass(frozen=True)
+class ExecutionDependency:
+    call_id: str
+    origin: ExecutionDependencyOrigin
+
+
+@dataclass(frozen=True)
 class ExecutionPlanNode:
     tool_call: ToolCallTurn
-    depends_on_call_ids: list[str] = field(default_factory=list)
+    dependencies: list[ExecutionDependency] = field(default_factory=list)
+    state: ExecutionNodeStatus = ExecutionNodeStatus.PLANNED
     result: ToolResultTurn | None = None
 
     @property
     def status(self) -> ExecutionNodeStatus:
-        if self.result is not None:
-            return ExecutionNodeStatus.COMPLETED
-        return ExecutionNodeStatus.PLANNED
+        return self.state
+
+    @property
+    def depends_on_call_ids(self) -> list[str]:
+        return [dependency.call_id for dependency in self.dependencies]
 
 
 @dataclass(frozen=True)
@@ -236,13 +250,18 @@ def build_execution_plan(
     nodes: list[ExecutionPlanNode] = []
     previous_call_id: str | None = None
     for tool_call in tool_calls:
-        depends_on_call_ids: list[str] = []
+        dependencies: list[ExecutionDependency] = []
         if previous_call_id is not None and strategy == ExecutionStrategy.SEQUENTIAL:
-            depends_on_call_ids.append(previous_call_id)
+            dependencies.append(
+                ExecutionDependency(
+                    call_id=previous_call_id,
+                    origin=ExecutionDependencyOrigin.EXECUTION_STRATEGY,
+                )
+            )
         nodes.append(
             ExecutionPlanNode(
                 tool_call=tool_call,
-                depends_on_call_ids=depends_on_call_ids,
+                dependencies=dependencies,
             )
         )
         previous_call_id = tool_call.tool_call_id
@@ -254,7 +273,7 @@ def apply_tool_result_to_plan(plan: ExecutionPlan, result: ToolResultTurn) -> Ex
     matched = False
     for node in plan.nodes:
         if node.tool_call.tool_call_id == result.tool_call_id and node.result is None:
-            nodes.append(replace(node, result=result))
+            nodes.append(replace(node, result=result, state=ExecutionNodeStatus.COMPLETED))
             matched = True
             continue
         nodes.append(node)
@@ -266,6 +285,24 @@ def apply_tool_result_to_plan(plan: ExecutionPlan, result: ToolResultTurn) -> Ex
 
 def apply_tool_result_to_step(step: ExecutionStep, result: ToolResultTurn) -> ExecutionStep:
     return replace(step, plan=apply_tool_result_to_plan(step.plan, result))
+
+
+def next_executable_plan_nodes(plan: ExecutionPlan) -> list[ExecutionPlanNode]:
+    completed_call_ids = {
+        node.tool_call.tool_call_id
+        for node in plan.nodes
+        if node.state == ExecutionNodeStatus.COMPLETED
+    }
+    executable: list[ExecutionPlanNode] = []
+    for node in plan.nodes:
+        if node.state != ExecutionNodeStatus.PLANNED:
+            continue
+        if not all(dependency.call_id in completed_call_ids for dependency in node.dependencies):
+            continue
+        executable.append(node)
+        if plan.strategy == ExecutionStrategy.SEQUENTIAL:
+            break
+    return executable
 
 
 def execution_steps_from_turns(turns: list[ConversationTurn]) -> list[ExecutionStep]:
@@ -467,16 +504,21 @@ def _append_tool_call_to_plan(plan: ExecutionPlan, tool_call: ToolCallTurn) -> E
     if any(node.tool_call.tool_call_id == tool_call.tool_call_id for node in plan.nodes):
         return plan
 
-    depends_on_call_ids: list[str] = []
+    dependencies: list[ExecutionDependency] = []
     if plan.strategy == ExecutionStrategy.SEQUENTIAL and plan.nodes:
-        depends_on_call_ids.append(plan.nodes[-1].tool_call.tool_call_id)
+        dependencies.append(
+            ExecutionDependency(
+                call_id=plan.nodes[-1].tool_call.tool_call_id,
+                origin=ExecutionDependencyOrigin.EXECUTION_STRATEGY,
+            )
+        )
     return replace(
         plan,
         nodes=[
             *plan.nodes,
             ExecutionPlanNode(
                 tool_call=tool_call,
-                depends_on_call_ids=depends_on_call_ids,
+                dependencies=dependencies,
             ),
         ],
     )
