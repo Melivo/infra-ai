@@ -20,6 +20,25 @@ is_router_process() {
   [[ "${args}" == *"router.app"* ]]
 }
 
+check_nvidia_runtime() {
+  if ! command -v nvidia-smi >/dev/null 2>&1; then
+    echo "nvidia-smi not found; install or expose the NVIDIA driver tools first" >&2
+    exit 1
+  fi
+
+  if ! nvidia-smi -L >/dev/null 2>&1; then
+    echo "NVIDIA driver is not ready; nvidia-smi cannot see the GPU" >&2
+    echo "check the host driver installation before starting vLLM" >&2
+    exit 1
+  fi
+
+  if [[ ! -S /run/nvidia-persistenced/socket ]]; then
+    echo "missing /run/nvidia-persistenced/socket; NVIDIA persistence daemon is not ready" >&2
+    echo "try: sudo systemctl enable --now nvidia-persistenced" >&2
+    exit 1
+  fi
+}
+
 cd "${REPO_ROOT}"
 
 mkdir -p "${HOME}/.ai/models" "${HOME}/.ai/cache" "${ROUTER_LOG_DIR}" "${RUN_DIR}"
@@ -36,6 +55,8 @@ fi
 if [[ -f "${REPO_ROOT}/requirements.txt" ]]; then
   "${PYTHON_BIN}" -m pip install -r "${REPO_ROOT}/requirements.txt"
 fi
+
+check_nvidia_runtime
 
 set -a
 # shellcheck source=/dev/null
