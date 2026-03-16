@@ -4,8 +4,10 @@ import unittest
 
 from router.conversation import (
     AssistantTurn,
+    ExecutionPlanNode,
     ExecutionStep,
     FinalTurn,
+    StepPhase,
     ToolCallTurn,
     ToolResultTurn,
     TurnType,
@@ -134,7 +136,12 @@ class ConversationTurnsTests(unittest.TestCase):
         self.assertEqual(len(steps), 1)
         self.assertIsInstance(steps[-1], ExecutionStep)
         self.assertEqual([turn.content for turn in steps[-1].reasoning_turns], ["thinking", "calling tools"])
+        self.assertEqual([turn.phase for turn in steps[-1].reasoning_turns], [StepPhase.REASONING, StepPhase.TOOL_PLAN])
         self.assertEqual(len(steps[-1].tool_calls), 2)
+        self.assertEqual(len(steps[-1].plan.nodes), 2)
+        self.assertIsInstance(steps[-1].plan.nodes[0], ExecutionPlanNode)
+        self.assertEqual(steps[-1].plan.nodes[0].depends_on_call_ids, [])
+        self.assertEqual(steps[-1].plan.nodes[1].depends_on_call_ids, ["call-1"])
         self.assertEqual(generation.message.content, "calling tools")
         self.assertEqual([tool_call.name for tool_call in generation.message.tool_calls], ["echo", "add_numbers"])
 
@@ -164,6 +171,19 @@ class ConversationTurnsTests(unittest.TestCase):
         self.assertEqual(len(steps), 1)
         self.assertEqual([turn.tool_name for turn in steps[0].tool_calls], ["echo", "add_numbers"])
         self.assertEqual([turn.tool_name for turn in steps[0].tool_results], ["echo", "add_numbers"])
+        self.assertEqual([node.depends_on_call_ids for node in steps[0].plan.nodes], [[], ["call-1"]])
+
+    def test_execution_steps_classify_finalization_phase(self) -> None:
+        turns = [
+            AssistantTurn(content="draft"),
+            AssistantTurn(content="final answer"),
+            FinalTurn(content="final answer"),
+        ]
+
+        steps = execution_steps_from_turns(turns)
+
+        self.assertEqual(len(steps), 1)
+        self.assertEqual([turn.phase for turn in steps[0].reasoning_turns], [StepPhase.REASONING, StepPhase.FINALIZATION])
 
 
 if __name__ == "__main__":

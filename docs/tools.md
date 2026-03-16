@@ -63,11 +63,13 @@ V1 unterstuetzt bewusst noch nicht:
 
 - spezialisierte Turn-Typen (`UserTurn`, `AssistantTurn`, `ToolCallTurn`, `ToolResultTurn`, `FinalTurn`) bilden die internen Rollen explizit statt ueber ein einzelnes ueberladenes Datamodell.
 - `ExecutionStep` gruppiert Reasoning-Turns, geplante Tool-Calls, ausgefuehrte Tool-Resultate und optional die Finalisierung eines Modellschritts.
+- `AssistantTurn.phase` unterscheidet aktuell mindestens `reasoning`, `tool_plan`, `refinement` und `finalization`.
+- `ExecutionPlan` haelt die geplanten Tool-Calls eines Steps bereits als explizite Knotenliste mit Abhaengigkeiten. Der aktuelle Router nutzt dabei bewusst noch eine sequentielle Strategie.
 - `NormalizedMessage`, `NormalizedToolCall` und `NormalizedGeneration` bleiben als Kompatibilitaets- und API-Schicht bestehen, z. B. fuer Provider-Request-Serialisierung und den stabilen HTTP-Response-Contract.
 - `GenerationRequest` haelt intern Turns und stellt Provider-Input explizit ueber `to_provider_messages()` bereit.
 - Fuer Tool-Result-Nachrichten ist `content_json` das interne Primaerformat; Provider-Adapter serialisieren strukturierte Inhalte erst an ihrer jeweiligen Grenze in Text.
 
-Mehrere Tool-Calls in einem Modellschritt werden sequentiell gegen denselben geplanten Step ausgefuehrt. Das ist bewusst noch kein echter Tool-Graph oder Planner, bildet aber den Plan-/Execution-Schnitt jetzt expliziter ab.
+Mehrere Tool-Calls in einem Modellschritt werden sequentiell gegen denselben geplanten Step ausgefuehrt. Das ist bewusst noch kein vollwertiger Tool-Graph-Executor, aber der Step enthaelt jetzt bereits einen expliziten `ExecutionPlan` statt nur lose rekonstruierter Listen.
 
 ## Fehlervertrag
 

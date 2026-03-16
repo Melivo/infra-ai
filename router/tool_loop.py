@@ -76,7 +76,11 @@ class ToolLoopEngine:
             generation_turns = parse_provider_generation(provider_output)
             turns.extend(generation_turns)
             current_step = _current_execution_step(generation_turns)
-            tool_call_turns = current_step.tool_calls if current_step is not None else []
+            tool_call_turns = (
+                [node.tool_call for node in current_step.plan.nodes]
+                if current_step is not None
+                else []
+            )
             if not tool_call_turns:
                 return ToolLoopResult(
                     turns=list(turns),

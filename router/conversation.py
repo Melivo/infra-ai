@@ -19,6 +19,17 @@ class TurnType(str, Enum):
     FINAL = "final"
 
 
+class StepPhase(str, Enum):
+    REASONING = "reasoning"
+    TOOL_PLAN = "tool_plan"
+    REFINEMENT = "refinement"
+    FINALIZATION = "finalization"
+
+
+class ExecutionStrategy(str, Enum):
+    SEQUENTIAL = "sequential"
+
+
 class ConversationTurn(Protocol):
     type: TurnType
     metadata: dict[str, JSONValue]
@@ -37,6 +48,7 @@ class UserTurn(ConversationTurn):
 class AssistantTurn(ConversationTurn):
     content: str | None = None
     content_json: JSONValue | None = None
+    phase: StepPhase = StepPhase.REASONING
     metadata: dict[str, JSONValue] = field(default_factory=dict)
     role: Literal["assistant"] = field(default="assistant", init=False)
     type: TurnType = field(default=TurnType.ASSISTANT, init=False)
@@ -72,11 +84,24 @@ class FinalTurn(ConversationTurn):
 
 
 @dataclass(frozen=True)
+class ExecutionPlanNode:
+    tool_call: ToolCallTurn
+    depends_on_call_ids: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ExecutionPlan:
+    strategy: ExecutionStrategy = ExecutionStrategy.SEQUENTIAL
+    nodes: list[ExecutionPlanNode] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class ExecutionStep:
     reasoning_turns: list[AssistantTurn] = field(default_factory=list)
     tool_calls: list[ToolCallTurn] = field(default_factory=list)
     tool_results: list[ToolResultTurn] = field(default_factory=list)
     final: FinalTurn | None = None
+    plan: ExecutionPlan = field(default_factory=ExecutionPlan)
 
 
 def message_to_turns(message: NormalizedMessage) -> list[ConversationTurn]:
@@ -170,33 +195,39 @@ def execution_steps_from_turns(turns: list[ConversationTurn]) -> list[ExecutionS
                 and not current_step.tool_results
                 and current_step.final is None
             ):
-                current_step = replace(
-                    current_step,
-                    reasoning_turns=[*current_step.reasoning_turns, turn],
+                current_step = _normalize_execution_step(
+                    replace(
+                        current_step,
+                        reasoning_turns=[*current_step.reasoning_turns, turn],
+                    )
                 )
                 steps[-1] = current_step
                 continue
-            current_step = ExecutionStep(reasoning_turns=[turn])
+            current_step = _normalize_execution_step(ExecutionStep(reasoning_turns=[turn]))
             steps.append(current_step)
             continue
         if current_step is None:
             continue
         if isinstance(turn, ToolCallTurn):
-            current_step = replace(
-                current_step,
-                tool_calls=[*current_step.tool_calls, turn],
+            current_step = _normalize_execution_step(
+                replace(
+                    current_step,
+                    tool_calls=[*current_step.tool_calls, turn],
+                )
             )
             steps[-1] = current_step
             continue
         if isinstance(turn, ToolResultTurn):
-            current_step = replace(
-                current_step,
-                tool_results=[*current_step.tool_results, turn],
+            current_step = _normalize_execution_step(
+                replace(
+                    current_step,
+                    tool_results=[*current_step.tool_results, turn],
+                )
             )
             steps[-1] = current_step
             continue
         if isinstance(turn, FinalTurn):
-            current_step = replace(current_step, final=turn)
+            current_step = _normalize_execution_step(replace(current_step, final=turn))
             steps[-1] = current_step
             continue
         current_step = None
@@ -234,6 +265,52 @@ def turns_to_generation(turns: list[ConversationTurn]) -> NormalizedGeneration:
         usage=usage if isinstance(usage, dict) else None,
         metadata=dict(metadata_source.metadata),
     )
+
+
+def _normalize_execution_step(step: ExecutionStep) -> ExecutionStep:
+    return replace(
+        step,
+        reasoning_turns=_classify_step_phases(step),
+        plan=_build_execution_plan(step.tool_calls),
+    )
+
+
+def _classify_step_phases(step: ExecutionStep) -> list[AssistantTurn]:
+    if not step.reasoning_turns:
+        return []
+
+    classified_turns: list[AssistantTurn] = []
+    last_index = len(step.reasoning_turns) - 1
+    for index, turn in enumerate(step.reasoning_turns):
+        phase = StepPhase.REASONING
+        if step.final is not None and index == last_index:
+            phase = StepPhase.FINALIZATION
+        elif step.tool_calls and index == last_index:
+            phase = StepPhase.TOOL_PLAN
+        elif index > 0:
+            phase = StepPhase.REFINEMENT
+        if turn.phase == phase:
+            classified_turns.append(turn)
+            continue
+        classified_turns.append(replace(turn, phase=phase))
+    return classified_turns
+
+
+def _build_execution_plan(tool_calls: list[ToolCallTurn]) -> ExecutionPlan:
+    nodes: list[ExecutionPlanNode] = []
+    previous_call_id: str | None = None
+    for tool_call in tool_calls:
+        depends_on_call_ids: list[str] = []
+        if previous_call_id is not None:
+            depends_on_call_ids.append(previous_call_id)
+        nodes.append(
+            ExecutionPlanNode(
+                tool_call=tool_call,
+                depends_on_call_ids=depends_on_call_ids,
+            )
+        )
+        previous_call_id = tool_call.tool_call_id
+    return ExecutionPlan(nodes=nodes)
 
 
 def turn_to_message(turn: ConversationTurn) -> NormalizedMessage:
