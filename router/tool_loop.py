@@ -5,11 +5,18 @@ from dataclasses import dataclass, replace
 from http import HTTPStatus
 import json
 
+from router.conversation import (
+    ConversationTurn,
+    TurnType,
+    generation_to_turns,
+    messages_to_turns,
+    tool_result_to_turn,
+    turns_to_messages,
+)
 from router.normalization import (
     GenerationRequest,
     NormalizedGeneration,
     NormalizedToolCall,
-    tool_result_to_message,
 )
 from router.providers.base import Provider
 from router.schemas import JSONValue
@@ -62,17 +69,20 @@ class ToolLoopEngine:
         request_id: str,
         allowed_tools: set[str] | None,
     ) -> ToolLoopResult:
-        current_request = request
+        turns = messages_to_turns(request.messages)
         tool_steps = 0
         recent_call_signatures: list[str] = []
 
         while True:
+            current_request = replace(request, messages=turns_to_messages(turns))
             generation = provider.generate(current_request)
-            tool_calls = generation.message.tool_calls
-            if not tool_calls:
+            generation_turns = generation_to_turns(generation)
+            turns.extend(generation_turns)
+            tool_call_turns = _tool_call_turns(generation_turns)
+            if not tool_call_turns:
                 return ToolLoopResult(generation=generation, tool_steps=tool_steps)
 
-            if len(tool_calls) != 1:
+            if len(tool_call_turns) != 1:
                 raise ToolLoopError(
                     HTTPStatus.BAD_GATEWAY,
                     "invalid_model_tool_call",
@@ -86,7 +96,8 @@ class ToolLoopEngine:
                     f"Model requested more than {self._max_tool_steps} tool steps.",
                 )
 
-            tool_call = tool_calls[0]
+            tool_call_turn = tool_call_turns[0]
+            tool_call = _normalized_tool_call_from_turn(tool_call_turn)
             self._validate_model_tool_call(tool_call)
             tool_call_signature = _tool_call_signature(tool_call.name, tool_call.arguments)
             if tool_call_signature in recent_call_signatures:
@@ -111,14 +122,7 @@ class ToolLoopEngine:
                 *recent_call_signatures[-(self._REPEATED_CALL_WINDOW - 1) :],
                 tool_call_signature,
             ]
-            current_request = replace(
-                current_request,
-                messages=[
-                    *current_request.messages,
-                    generation.message,
-                    tool_result_to_message(result),
-                ],
-            )
+            turns.append(tool_result_to_turn(result))
 
     async def run_tool_call(
         self,
@@ -233,3 +237,16 @@ class ToolLoopEngine:
 
 def _tool_call_signature(name: str, arguments: dict[str, JSONValue]) -> str:
     return f"{name}:{json.dumps(arguments, sort_keys=True, separators=(',', ':'))}"
+
+
+def _tool_call_turns(turns: list[ConversationTurn]) -> list[ConversationTurn]:
+    return [turn for turn in turns if turn.type == TurnType.TOOL_CALL]
+
+
+def _normalized_tool_call_from_turn(turn: ConversationTurn) -> NormalizedToolCall:
+    return NormalizedToolCall(
+        call_id=turn.tool_call_id or "",
+        name=turn.tool_name or "",
+        arguments=dict(turn.tool_arguments or {}),
+        metadata=dict(turn.metadata),
+    )
