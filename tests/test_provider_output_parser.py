@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from router.conversation import turns_to_generation
-from router.provider_output import ProviderOutput, parse_provider_generation
+from router.conversation import ExecutionNodeStatus, StepPhase, turns_to_generation
+from router.provider_output import ProviderOutput, parse_provider_generation, parse_provider_step
 from router.providers.base import ProviderError
 
 
@@ -35,7 +35,7 @@ class ProviderOutputParserTests(unittest.TestCase):
         self.assertEqual(turns[1].metadata["provider_name"], "local_vllm")
 
     def test_parse_openai_chat_tool_call_detection(self) -> None:
-        turns = parse_provider_generation(
+        parsed = parse_provider_step(
             ProviderOutput(
                 format="openai_chat_completion",
                 body={
@@ -65,8 +65,12 @@ class ProviderOutputParserTests(unittest.TestCase):
                 fallback_model="Qwen",
             )
         )
+        turns = parsed.turns
 
         self.assertEqual([turn.type.value for turn in turns], ["assistant", "tool_call"])
+        self.assertEqual(parsed.step.planning_turns[-1].phase, StepPhase.TOOL_PLAN)
+        self.assertEqual(len(parsed.step.plan.nodes), 1)
+        self.assertEqual(parsed.step.plan.nodes[0].status, ExecutionNodeStatus.PLANNED)
         self.assertEqual(turns[1].tool_name, "add_numbers")
         self.assertEqual(turns[1].tool_arguments, {"a": 2, "b": 3})
 
@@ -196,7 +200,7 @@ class ProviderOutputParserTests(unittest.TestCase):
         self.assertEqual(generation.usage["total_tokens"], 14)
 
     def test_parse_gemini_fallback_returns_assistant_and_final_turns(self) -> None:
-        turns = parse_provider_generation(
+        parsed = parse_provider_step(
             ProviderOutput(
                 format="gemini_generate_content",
                 body={
@@ -221,8 +225,11 @@ class ProviderOutputParserTests(unittest.TestCase):
                 fallback_model="gemini-2.5-pro",
             )
         )
+        turns = parsed.turns
 
         self.assertEqual([turn.type.value for turn in turns], ["assistant", "final"])
+        self.assertEqual(parsed.step.finalization_turns[-1].phase, StepPhase.FINALIZATION)
+        self.assertEqual(parsed.step.final.content, "gemini result")
         self.assertEqual(turns[0].content, "gemini result")
         self.assertEqual(turns[1].metadata["provider_name"], "gemini_fallback")
         self.assertEqual(turns[1].metadata["finish_reason"], "stop")

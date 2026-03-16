@@ -27,7 +27,7 @@ Der bisherige explizite Debug-Pfad ueber `tool_call` in `POST /v1/chat/completio
 
 ## Interne Bausteine
 
-- `ConversationTurn`, spezialisierte Turn-Typen und `ExecutionStep`-Mapping in `router/conversation.py`
+- `ConversationTurn`, spezialisierte Turn-Typen sowie explizite `ExecutionStep`-/`ExecutionPlan`-State-Modelle in `router/conversation.py`
 - `ProviderOutput` plus Parser/Validierung in `router/provider_output/`
 - `NormalizedToolCall`, `NormalizedMessage`, `NormalizedGeneration`, `GenerationRequest` in `router/normalization.py` als Kompatibilitaets- und Boundary-Schicht
 - `ToolSpec`, `ToolCall`, `ToolResult`, `ToolContext`, `ToolExecutor` in `router/tools/types.py`
@@ -62,14 +62,14 @@ V1 unterstuetzt bewusst noch nicht:
 `ConversationTurn` ist jetzt das primaere interne Modell im Router-Kern. Provider-Rohantworten werden an der Boundary in Turns geparst, und der Tool-Loop arbeitet providerunabhaengig nur noch auf diesen Turns.
 
 - spezialisierte Turn-Typen (`UserTurn`, `AssistantTurn`, `ToolCallTurn`, `ToolResultTurn`, `FinalTurn`) bilden die internen Rollen explizit statt ueber ein einzelnes ueberladenes Datamodell.
-- `ExecutionStep` gruppiert Reasoning-Turns, geplante Tool-Calls, ausgefuehrte Tool-Resultate und optional die Finalisierung eines Modellschritts.
-- `AssistantTurn.phase` unterscheidet aktuell mindestens `reasoning`, `tool_plan`, `refinement` und `finalization`.
-- `ExecutionPlan` haelt die geplanten Tool-Calls eines Steps bereits als explizite Knotenliste mit Abhaengigkeiten. Der aktuelle Router nutzt dabei bewusst noch eine sequentielle Strategie.
+- `ExecutionStep` ist die autoritative Orchestrierungseinheit pro Modellschritt. Sie haelt explizit Reasoning-, Planning-, Refinement- und Finalization-Turns sowie den aktuellen `ExecutionPlan`.
+- `AssistantTurn.phase` unterscheidet explizit `reasoning`, `tool_plan`, `refinement` und `finalization`; diese Phase wird an der Provider-Boundary moeglichst direkt gesetzt statt spaeter global erraten.
+- `ExecutionPlan` haelt die geplanten Tool-Calls eines Steps als explizite Knotenliste mit Strategie, Abhaengigkeiten und Ausfuehrungsstatus. Tool-Resultate werden an Plan-Knoten angehaengt, statt nur lose als zweite Liste nebenher zu laufen.
 - `NormalizedMessage`, `NormalizedToolCall` und `NormalizedGeneration` bleiben als Kompatibilitaets- und API-Schicht bestehen, z. B. fuer Provider-Request-Serialisierung und den stabilen HTTP-Response-Contract.
 - `GenerationRequest` haelt intern Turns und stellt Provider-Input explizit ueber `to_provider_messages()` bereit.
 - Fuer Tool-Result-Nachrichten ist `content_json` das interne Primaerformat; Provider-Adapter serialisieren strukturierte Inhalte erst an ihrer jeweiligen Grenze in Text.
 
-Mehrere Tool-Calls in einem Modellschritt werden sequentiell gegen denselben geplanten Step ausgefuehrt. Das ist bewusst noch kein vollwertiger Tool-Graph-Executor, aber der Step enthaelt jetzt bereits einen expliziten `ExecutionPlan` statt nur lose rekonstruierter Listen.
+Mehrere Tool-Calls in einem Modellschritt werden weiterhin sequentiell gegen denselben geplanten Step ausgefuehrt. Das ist bewusst noch kein vollwertiger Tool-Graph-Executor, aber der Step enthaelt jetzt bereits einen expliziten `ExecutionPlan` mit Knotenstatus statt nur lose rekonstruierter Listen.
 
 ## Fehlervertrag
 

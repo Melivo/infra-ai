@@ -2,14 +2,26 @@
 
 from __future__ import annotations
 
-from router.conversation import AssistantTurn, ConversationTurn, FinalTurn, ToolCallTurn
+from router.conversation import (
+    AssistantTurn,
+    ConversationTurn,
+    ExecutionStep,
+    FinalTurn,
+    StepPhase,
+    ToolCallTurn,
+    build_execution_plan,
+)
 from router.schemas import JSONValue
 
-from router.provider_output.types import ProviderOutput
+from router.provider_output.types import ParsedProviderStep, ProviderOutput
 from router.provider_output.validators import invalid_model_tool_call, parse_tool_call_fields
 
 
 def parse_provider_generation(provider_response: ProviderOutput) -> list[ConversationTurn]:
+    return parse_provider_step(provider_response).turns
+
+
+def parse_provider_step(provider_response: ProviderOutput) -> ParsedProviderStep:
     if provider_response.format == "openai_chat_completion":
         return _parse_openai_chat_completion(provider_response)
     if provider_response.format == "openai_responses":
@@ -19,10 +31,10 @@ def parse_provider_generation(provider_response: ProviderOutput) -> list[Convers
     raise ValueError(f"Unsupported provider output format: {provider_response.format!r}")
 
 
-def _parse_openai_chat_completion(provider_response: ProviderOutput) -> list[ConversationTurn]:
+def _parse_openai_chat_completion(provider_response: ProviderOutput) -> ParsedProviderStep:
     body = provider_response.body
     if not isinstance(body, dict):
-        return _assistant_final_turns(
+        return _assistant_final_step(
             content="",
             metadata=_generation_metadata(
                 provider_name=provider_response.provider_name,
@@ -33,7 +45,7 @@ def _parse_openai_chat_completion(provider_response: ProviderOutput) -> list[Con
 
     choices = body.get("choices")
     if not isinstance(choices, list) or not choices:
-        return _assistant_final_turns(
+        return _assistant_final_step(
             content="",
             metadata=_generation_metadata(
                 response_id=_string_value(body.get("id")),
@@ -61,13 +73,13 @@ def _parse_openai_chat_completion(provider_response: ProviderOutput) -> list[Con
         provider_slot=provider_response.provider_slot,
         usage=body.get("usage") if isinstance(body.get("usage"), dict) else None,
     )
-    return _assistant_turns(content=content, metadata=metadata, tool_call_turns=tool_call_turns)
+    return _assistant_step(content=content, metadata=metadata, tool_call_turns=tool_call_turns)
 
 
-def _parse_openai_responses(provider_response: ProviderOutput) -> list[ConversationTurn]:
+def _parse_openai_responses(provider_response: ProviderOutput) -> ParsedProviderStep:
     body = provider_response.body
     if not isinstance(body, dict):
-        return _assistant_final_turns(
+        return _assistant_final_step(
             content="",
             metadata=_generation_metadata(
                 response_id="openai-responses",
@@ -96,13 +108,13 @@ def _parse_openai_responses(provider_response: ProviderOutput) -> list[Conversat
         provider_slot=provider_response.provider_slot,
         usage=usage_payload,
     )
-    return _assistant_turns(content=message_text, metadata=metadata, tool_call_turns=tool_call_turns)
+    return _assistant_step(content=message_text, metadata=metadata, tool_call_turns=tool_call_turns)
 
 
-def _parse_gemini_generate_content(provider_response: ProviderOutput) -> list[ConversationTurn]:
+def _parse_gemini_generate_content(provider_response: ProviderOutput) -> ParsedProviderStep:
     body = provider_response.body
     if not isinstance(body, dict):
-        return _assistant_final_turns(
+        return _assistant_final_step(
             content="",
             metadata=_generation_metadata(
                 finish_reason="stop",
@@ -143,7 +155,7 @@ def _parse_gemini_generate_content(provider_response: ProviderOutput) -> list[Co
             "total_tokens": usage.get("totalTokenCount", 0),
         }
 
-    return _assistant_final_turns(
+    return _assistant_final_step(
         content=message_text,
         metadata=_generation_metadata(
             finish_reason=finish_reason,
@@ -156,31 +168,41 @@ def _parse_gemini_generate_content(provider_response: ProviderOutput) -> list[Co
     )
 
 
-def _assistant_turns(
+def _assistant_step(
     *,
     content: str,
     metadata: dict[str, JSONValue],
     tool_call_turns: list[ConversationTurn],
-) -> list[ConversationTurn]:
-    turns = [
-        AssistantTurn(
+) -> ParsedProviderStep:
+    phase = StepPhase.TOOL_PLAN if tool_call_turns else StepPhase.FINALIZATION
+    assistant_turn = AssistantTurn(
+        content=content,
+        phase=phase,
+        metadata=dict(metadata),
+    )
+    turns: list[ConversationTurn] = [assistant_turn]
+    turns.extend(tool_call_turns)
+    step = ExecutionStep(
+        planning_turns=[assistant_turn] if tool_call_turns else [],
+        finalization_turns=[] if tool_call_turns else [assistant_turn],
+        plan=build_execution_plan([turn for turn in tool_call_turns if isinstance(turn, ToolCallTurn)]),
+    )
+    if not tool_call_turns:
+        final_turn = FinalTurn(
             content=content,
             metadata=dict(metadata),
         )
-    ]
-    turns.extend(tool_call_turns)
-    if not tool_call_turns:
-        turns.append(
-            FinalTurn(
-                content=content,
-                metadata=dict(metadata),
-            )
+        turns.append(final_turn)
+        step = ExecutionStep(
+            finalization_turns=[assistant_turn],
+            plan=build_execution_plan([]),
+            final=final_turn,
         )
-    return turns
+    return ParsedProviderStep(turns=turns, step=step)
 
 
-def _assistant_final_turns(*, content: str, metadata: dict[str, JSONValue]) -> list[ConversationTurn]:
-    return _assistant_turns(content=content, metadata=metadata, tool_call_turns=[])
+def _assistant_final_step(*, content: str, metadata: dict[str, JSONValue]) -> ParsedProviderStep:
+    return _assistant_step(content=content, metadata=metadata, tool_call_turns=[])
 
 
 def _extract_openai_message_content(content: JSONValue) -> str:

@@ -4,6 +4,7 @@ import unittest
 
 from router.conversation import (
     AssistantTurn,
+    ExecutionNodeStatus,
     ExecutionPlanNode,
     ExecutionStep,
     FinalTurn,
@@ -12,6 +13,8 @@ from router.conversation import (
     ToolResultTurn,
     TurnType,
     UserTurn,
+    apply_tool_result_to_step,
+    build_execution_plan,
     execution_steps_from_turns,
     generation_to_turns,
     messages_to_turns,
@@ -125,7 +128,7 @@ class ConversationTurnsTests(unittest.TestCase):
         turns = [
             UserTurn(role="user", content="plan something"),
             AssistantTurn(content="thinking"),
-            AssistantTurn(content="calling tools"),
+            AssistantTurn(content="calling tools", phase=StepPhase.TOOL_PLAN),
             ToolCallTurn(tool_name="echo", tool_call_id="call-1", tool_arguments={"message": "hi"}),
             ToolCallTurn(tool_name="add_numbers", tool_call_id="call-2", tool_arguments={"a": 2, "b": 3}),
         ]
@@ -135,8 +138,10 @@ class ConversationTurnsTests(unittest.TestCase):
 
         self.assertEqual(len(steps), 1)
         self.assertIsInstance(steps[-1], ExecutionStep)
-        self.assertEqual([turn.content for turn in steps[-1].reasoning_turns], ["thinking", "calling tools"])
-        self.assertEqual([turn.phase for turn in steps[-1].reasoning_turns], [StepPhase.REASONING, StepPhase.TOOL_PLAN])
+        self.assertEqual([turn.content for turn in steps[-1].reasoning_turns], ["thinking"])
+        self.assertEqual([turn.phase for turn in steps[-1].reasoning_turns], [StepPhase.REASONING])
+        self.assertEqual([turn.phase for turn in steps[-1].planning_turns], [StepPhase.TOOL_PLAN])
+        self.assertEqual(steps[-1].planning_turns[-1].content, "calling tools")
         self.assertEqual(len(steps[-1].tool_calls), 2)
         self.assertEqual(len(steps[-1].plan.nodes), 2)
         self.assertIsInstance(steps[-1].plan.nodes[0], ExecutionPlanNode)
@@ -172,18 +177,40 @@ class ConversationTurnsTests(unittest.TestCase):
         self.assertEqual([turn.tool_name for turn in steps[0].tool_calls], ["echo", "add_numbers"])
         self.assertEqual([turn.tool_name for turn in steps[0].tool_results], ["echo", "add_numbers"])
         self.assertEqual([node.depends_on_call_ids for node in steps[0].plan.nodes], [[], ["call-1"]])
+        self.assertEqual([node.status for node in steps[0].plan.nodes], [ExecutionNodeStatus.COMPLETED, ExecutionNodeStatus.COMPLETED])
 
     def test_execution_steps_classify_finalization_phase(self) -> None:
         turns = [
             AssistantTurn(content="draft"),
-            AssistantTurn(content="final answer"),
+            AssistantTurn(content="final answer", phase=StepPhase.FINALIZATION),
             FinalTurn(content="final answer"),
         ]
 
         steps = execution_steps_from_turns(turns)
 
         self.assertEqual(len(steps), 1)
-        self.assertEqual([turn.phase for turn in steps[0].reasoning_turns], [StepPhase.REASONING, StepPhase.FINALIZATION])
+        self.assertEqual([turn.phase for turn in steps[0].reasoning_turns], [StepPhase.REASONING])
+        self.assertEqual([turn.phase for turn in steps[0].finalization_turns], [StepPhase.FINALIZATION])
+
+    def test_apply_tool_result_updates_explicit_execution_plan_state(self) -> None:
+        step = ExecutionStep(
+            planning_turns=[AssistantTurn(content="plan", phase=StepPhase.TOOL_PLAN)],
+            plan=build_execution_plan(
+                [
+                    ToolCallTurn(tool_name="echo", tool_call_id="call-1", tool_arguments={"message": "hi"}),
+                    ToolCallTurn(tool_name="add_numbers", tool_call_id="call-2", tool_arguments={"a": 2, "b": 3}),
+                ]
+            ),
+        )
+
+        updated = apply_tool_result_to_step(
+            step,
+            ToolResultTurn(tool_name="echo", tool_call_id="call-1", content_json={"message": "hi"}),
+        )
+
+        self.assertEqual(updated.plan.nodes[0].status, ExecutionNodeStatus.COMPLETED)
+        self.assertEqual(updated.plan.nodes[0].result.content_json, {"message": "hi"})
+        self.assertEqual(updated.plan.nodes[1].status, ExecutionNodeStatus.PLANNED)
 
 
 if __name__ == "__main__":

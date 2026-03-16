@@ -8,13 +8,13 @@ import json
 from router.conversation import (
     ConversationTurn,
     ExecutionStep,
-    ToolCallTurn,
+    apply_tool_result_to_step,
     execution_steps_from_turns,
     tool_result_to_turn,
     turn_to_tool_call,
 )
 from router.normalization import GenerationRequest, NormalizedToolCall
-from router.provider_output import parse_provider_generation
+from router.provider_output import parse_provider_step
 from router.providers.base import Provider
 from router.schemas import JSONValue
 from router.tools.orchestrator import ToolExecutionTimeoutError, ToolOrchestrator
@@ -39,6 +39,7 @@ class ToolLoopError(RuntimeError):
 @dataclass(frozen=True)
 class ToolLoopResult:
     turns: list[ConversationTurn]
+    steps: list[ExecutionStep]
     tool_steps: int
 
 
@@ -67,15 +68,17 @@ class ToolLoopEngine:
         allowed_tools: set[str] | None,
     ) -> ToolLoopResult:
         turns = list(request.turns)
+        steps = execution_steps_from_turns(turns)
         tool_steps = 0
         recent_call_signatures: list[str] = []
 
         while True:
             current_request = replace(request, turns=list(turns), _provider_messages=None)
             provider_output = provider.generate(current_request)
-            generation_turns = parse_provider_generation(provider_output)
-            turns.extend(generation_turns)
-            current_step = _current_execution_step(generation_turns)
+            parsed_step = parse_provider_step(provider_output)
+            turns.extend(parsed_step.turns)
+            steps.append(parsed_step.step)
+            current_step = parsed_step.step
             tool_call_turns = (
                 [node.tool_call for node in current_step.plan.nodes]
                 if current_step is not None
@@ -84,6 +87,7 @@ class ToolLoopEngine:
             if not tool_call_turns:
                 return ToolLoopResult(
                     turns=list(turns),
+                    steps=list(steps),
                     tool_steps=tool_steps,
                 )
 
@@ -125,7 +129,9 @@ class ToolLoopEngine:
                     *recent_call_signatures[-(self._REPEATED_CALL_WINDOW - 1) :],
                     tool_call_signature,
                 ]
-                turns.append(tool_result_to_turn(result))
+                result_turn = tool_result_to_turn(result)
+                turns.append(result_turn)
+                steps[-1] = apply_tool_result_to_step(steps[-1], result_turn)
 
     async def run_tool_call(
         self,
@@ -240,14 +246,3 @@ class ToolLoopEngine:
 
 def _tool_call_signature(name: str, arguments: dict[str, JSONValue]) -> str:
     return f"{name}:{json.dumps(arguments, sort_keys=True, separators=(',', ':'))}"
-
-
-def _tool_call_turns(turns: list[ConversationTurn]) -> list[ToolCallTurn]:
-    return [turn for turn in turns if isinstance(turn, ToolCallTurn)]
-
-
-def _current_execution_step(turns: list[ConversationTurn]) -> ExecutionStep | None:
-    steps = execution_steps_from_turns(turns)
-    if not steps:
-        return None
-    return steps[-1]

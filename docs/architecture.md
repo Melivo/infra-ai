@@ -40,7 +40,8 @@ The router controls:
 - routing modes and policies
 - provider selection
 - provider response normalization into turn and execution-step state
-- tool-loop orchestration
+- tool-loop orchestration against explicit step and plan state
+- sequential plan execution with explicit dependency-carrying plan nodes
 - provider error normalization
 - timeout policy
 - streaming behavior at the platform boundary
