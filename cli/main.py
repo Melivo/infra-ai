@@ -167,11 +167,13 @@ def extract_text(response: dict[str, object]) -> str:
     return json.dumps(response, indent=2)
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Send a prompt to the infra-ai router.")
     parser.add_argument("prompt", nargs="*", help="Prompt text. Reads stdin when omitted.")
     parser.add_argument(
+        "--router-url",
         "--base-url",
+        dest="router_url",
         default=os.environ.get("INFRA_AI_ROUTER_BASE_URL", "http://127.0.0.1:8010/v1"),
         help="Router base URL, usually http://127.0.0.1:8010/v1.",
     )
@@ -224,7 +226,33 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print raw JSON, or raw event-stream lines when combined with --stream.",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Start an interactive prompt loop instead of requiring a one-shot prompt.",
+    )
+    return parser.parse_args(argv)
+
+
+def should_run_interactive(
+    args: argparse.Namespace,
+    *,
+    stdin_isatty: bool | None = None,
+    stdout_isatty: bool | None = None,
+) -> bool:
+    if args.capabilities:
+        return False
+    if args.interactive:
+        return True
+    if args.prompt:
+        return False
+
+    if stdin_isatty is None:
+        stdin_isatty = sys.stdin.isatty()
+    if stdout_isatty is None:
+        stdout_isatty = sys.stdout.isatty()
+
+    return stdin_isatty and stdout_isatty
 
 
 def _read_prompt(args: argparse.Namespace) -> str:
@@ -237,19 +265,12 @@ def _read_prompt(args: argparse.Namespace) -> str:
     raise SystemExit("prompt required as argument or via stdin")
 
 
-def main() -> None:
-    args = parse_args()
-
-    if args.capabilities:
-        capabilities = request_capabilities(
-            base_url=args.base_url,
-            timeout_s=args.timeout,
-        )
-        print(json.dumps(capabilities, indent=2))
-        return
-
-    prompt = _read_prompt(args)
-    selected_tools = select_tools(args.base_url)
+def _run_request(
+    *,
+    args: argparse.Namespace,
+    prompt: str,
+    allowed_tools: list[str] | None,
+) -> None:
     payload = build_payload(
         prompt=prompt,
         model=args.model,
@@ -258,12 +279,12 @@ def main() -> None:
         temperature=args.temperature,
         max_tokens=args.max_tokens,
         stream=args.stream,
-        allowed_tools=selected_tools or None,
+        allowed_tools=allowed_tools,
     )
 
     if args.stream:
         stream_chat(
-            base_url=args.base_url,
+            base_url=args.router_url,
             payload=payload,
             timeout_s=args.timeout,
             raw=args.raw,
@@ -271,7 +292,7 @@ def main() -> None:
         return
 
     response = request_chat(
-        base_url=args.base_url,
+        base_url=args.router_url,
         payload=payload,
         timeout_s=args.timeout,
     )
@@ -281,6 +302,51 @@ def main() -> None:
         return
 
     print(extract_text(response))
+
+
+def run_interactive(args: argparse.Namespace) -> None:
+    selected_tools = select_tools(args.router_url) or None
+
+    print(f"infra-ai CLI connected to {args.router_url}")
+    print(f"route={args.route} model={args.model}")
+    print("Type /exit or /quit to leave.")
+
+    while True:
+        try:
+            prompt = input("infra-ai> ").strip()
+        except EOFError:
+            print()
+            return
+        except KeyboardInterrupt:
+            print()
+            continue
+
+        if not prompt:
+            continue
+        if prompt in {"/exit", "/quit"}:
+            return
+
+        _run_request(args=args, prompt=prompt, allowed_tools=selected_tools)
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
+
+    if args.capabilities:
+        capabilities = request_capabilities(
+            base_url=args.router_url,
+            timeout_s=args.timeout,
+        )
+        print(json.dumps(capabilities, indent=2))
+        return
+
+    if should_run_interactive(args):
+        run_interactive(args)
+        return
+
+    prompt = _read_prompt(args)
+    selected_tools = select_tools(args.router_url) or None
+    _run_request(args=args, prompt=prompt, allowed_tools=selected_tools)
 
 
 if __name__ == "__main__":

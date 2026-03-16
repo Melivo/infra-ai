@@ -117,7 +117,9 @@ bash scripts/start.sh
 bash scripts/stop.sh
 ```
 
-`scripts/start.sh` startet `vLLM` und den Router im Hintergrund. Der Router schreibt dabei nach `~/.ai/logs/router.log`.
+`scripts/start.sh` startet `vLLM`, startet oder verwendet den Router auf `http://127.0.0.1:8010/v1`, wartet auf `GET /healthz` und wechselt auf einem interaktiven Terminal danach direkt ins `infra-ai` CLI. `vLLM` bleibt dabei der separate lokale Provider auf Port `8000`.
+Falls du nur den Stack ohne CLI starten willst, nutze `bash scripts/start.sh --no-cli`.
+Der Router schreibt dabei nach `~/.ai/logs/router.log`.
 Falls `.venv` noch nicht existiert, legt das Skript sie an und installiert `requirements.txt`, bevor der Router gestartet wird.
 Die Router-PID liegt stabil unter `~/.ai/run/router.pid`; das Script prueft ausserdem, ob diese PID wirklich zu `router.app` gehoert, bevor es einen zweiten Start blockiert oder beim Stoppen beendet.
 Vor dem Docker-Start prueft das Script ausserdem, ob `nvidia-smi` funktioniert und ob `/run/nvidia-persistenced/socket` vorhanden ist. Falls nicht, bekommst du einen klaren Hinweis statt eines spaeteren OCI-Fehlers.
@@ -313,13 +315,19 @@ Die Logs enthalten bewusst keine Prompt-Inhalte, keine API-Keys und keine sonsti
 Die CLI ist ein bewusst duennes Referenz-Frontend und enthaelt keine Provider- oder Agentenlogik.
 
 ```bash
-python3 -m cli.main --route local "Fasse in einem Satz zusammen, wofuer infra-ai gebaut ist."
+python3 -m cli --route local "Fasse in einem Satz zusammen, wofuer infra-ai gebaut ist."
 ```
 
 Capabilities abrufen:
 
 ```bash
-python3 -m cli.main --capabilities
+python3 -m cli --capabilities
+```
+
+Interaktives CLI direkt gegen den Router:
+
+```bash
+python3 -m cli
 ```
 
 ## CLI Tool Selection
@@ -331,13 +339,13 @@ Die Auswahl wird als `allowed_tools` an den Router gesendet. Die eigentliche Too
 Optional mit stdin:
 
 ```bash
-printf 'Nenne die aktuelle Router-Architektur in einem Satz.' | python3 -m cli.main --route auto
+printf 'Nenne die aktuelle Router-Architektur in einem Satz.' | python3 -m cli --route auto
 ```
 
 Minimales lokales Streaming:
 
 ```bash
-python3 -m cli.main --route local --stream "Erklaere in zwei Saetzen, was infra-ai ist."
+python3 -m cli --route local --stream "Erklaere in zwei Saetzen, was infra-ai ist."
 ```
 
 Die CLI spricht standardmaessig mit `http://127.0.0.1:8010/v1`, sendet `model=auto` und reicht `route` unveraendert an den Router durch.
