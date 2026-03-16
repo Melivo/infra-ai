@@ -109,6 +109,15 @@ python3 -m router.app
 
 Standardmaessig lauscht der Router auf `http://127.0.0.1:8010`.
 
+Alternativ kannst du den lokalen Stack mit kleinen Helfern starten und stoppen:
+
+```bash
+bash scripts/start.sh
+bash scripts/stop.sh
+```
+
+`scripts/start.sh` startet `vLLM` und den Router im Hintergrund. Der Router schreibt dabei nach `~/.ai/logs/router.log`.
+
 Aktuell exponiert er:
 
 - `GET /healthz`
