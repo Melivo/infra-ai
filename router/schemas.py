@@ -23,6 +23,8 @@ class RouterConfig:
     host: str
     port: int
     request_timeout_s: float
+    max_tool_steps: int
+    tool_timeout_s: float
     local_vllm_base_url: str
     local_vllm_default_model: str
     enable_gemini_fallback: bool

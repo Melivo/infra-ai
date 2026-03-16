@@ -11,6 +11,8 @@ def build_config(**overrides: object) -> RouterConfig:
         host="127.0.0.1",
         port=8010,
         request_timeout_s=120.0,
+        max_tool_steps=4,
+        tool_timeout_s=30.0,
         local_vllm_base_url="http://127.0.0.1:8000/v1",
         local_vllm_default_model="Qwen/Qwen3-14B-AWQ",
         enable_gemini_fallback=False,
@@ -75,10 +77,12 @@ class RouterConfigValidationTests(unittest.TestCase):
 
     def test_invalid_port_and_timeout_are_rejected(self) -> None:
         with self.assertRaises(ConfigValidationError) as exc_info:
-            RouterApplication(build_config(port=0, request_timeout_s=0))
+            RouterApplication(build_config(port=0, request_timeout_s=0, max_tool_steps=0, tool_timeout_s=0))
 
         self.assertIn("INFRA_AI_ROUTER_PORT", str(exc_info.exception))
         self.assertIn("INFRA_AI_REQUEST_TIMEOUT_S", str(exc_info.exception))
+        self.assertIn("INFRA_AI_MAX_TOOL_STEPS", str(exc_info.exception))
+        self.assertIn("INFRA_AI_TOOL_TIMEOUT_S", str(exc_info.exception))
 
     def test_request_timeout_is_propagated_to_all_provider_clients(self) -> None:
         app = RouterApplication(build_config(request_timeout_s=42.5))
@@ -87,6 +91,8 @@ class RouterConfigValidationTests(unittest.TestCase):
         self.assertEqual(app.providers["gemini_fallback"].timeout_s, 42.5)
         self.assertEqual(app.providers["openai_responses"].timeout_s, 42.5)
         self.assertEqual(app.openai_models.timeout_s, 42.5)
+        self.assertEqual(app.tool_loop_engine._max_tool_steps, 4)
+        self.assertEqual(app.tool_loop_engine._tool_timeout_s, 30.0)
 
 
 if __name__ == "__main__":

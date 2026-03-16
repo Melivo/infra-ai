@@ -7,6 +7,7 @@ from socket import timeout as SocketTimeout
 from urllib.response import addinfourl
 from urllib import error, request
 
+from router.normalization import GenerationRequest, NormalizedGeneration
 from router.schemas import JSONValue
 
 AUTO_MODEL_ALIASES = {"", "auto", "default", "router-default"}
@@ -15,6 +16,7 @@ PUBLIC_PROVIDER_ERROR_TYPES = {
     "invalid_messages",
     "invalid_message",
     "invalid_role",
+    "invalid_model_tool_call",
     "unsupported_role",
     "missing_user_content",
     "unsupported_content",
@@ -45,8 +47,12 @@ class Provider(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def chat_completions(self, payload: dict[str, JSONValue]) -> tuple[int, JSONValue]:
+    def generate(self, request: GenerationRequest) -> NormalizedGeneration:
         raise NotImplementedError
+
+    def chat_completions(self, request: GenerationRequest) -> tuple[int, JSONValue]:
+        generation = self.generate(request)
+        return 200, generation_to_chat_completion(generation)
 
     def stream_chat_completions(self, payload: dict[str, JSONValue]) -> addinfourl:
         del payload
@@ -211,6 +217,47 @@ def normalize_provider_error(error: ProviderError) -> JSONValue:
         fallback_message=str(error),
     )
     return _error_payload(normalized_type, normalized_message)
+
+
+def generation_to_chat_completion(generation: NormalizedGeneration) -> JSONValue:
+    message_payload: dict[str, JSONValue] = {
+        "role": generation.message.role,
+        "content": generation.message.content or "",
+    }
+    if generation.message.tool_calls:
+        message_payload["tool_calls"] = [
+            {
+                "id": tool_call.call_id,
+                "type": "function",
+                "function": {
+                    "name": tool_call.name,
+                    "arguments": json.dumps(tool_call.arguments),
+                },
+            }
+            for tool_call in generation.message.tool_calls
+        ]
+
+    response: dict[str, JSONValue] = {
+        "id": generation.response_id or "chatcmpl-router",
+        "object": "chat.completion",
+        "choices": [
+            {
+                "index": 0,
+                "message": message_payload,
+                "finish_reason": generation.finish_reason
+                or ("tool_calls" if generation.message.tool_calls else "stop"),
+            }
+        ],
+    }
+    if generation.model is not None:
+        response["model"] = generation.model
+    if generation.provider_name is not None:
+        response["provider"] = generation.provider_name
+    if generation.provider_slot is not None:
+        response["provider_slot"] = generation.provider_slot
+    if generation.usage is not None:
+        response["usage"] = generation.usage
+    return response
 
 
 def _decode_json(raw: bytes, fallback_message: str) -> JSONValue:

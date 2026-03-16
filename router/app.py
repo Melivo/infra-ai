@@ -5,13 +5,13 @@ import json
 import logging
 import os
 from collections.abc import Callable, Iterator
-from dataclasses import asdict
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from socket import timeout as SocketTimeout
 from typing import cast
 from uuid import uuid4
 
+from router.normalization import GenerationRequest, request_messages_from_payload
 from router.policies import (
     RoutingPolicyError,
     provider_for_route,
@@ -20,7 +20,12 @@ from router.policies import (
     route_streaming_supported,
     select_provider,
 )
-from router.providers.base import Provider, ProviderError, normalize_provider_error
+from router.providers.base import (
+    Provider,
+    ProviderError,
+    generation_to_chat_completion,
+    normalize_provider_error,
+)
 from router.providers.gemini_fallback import GeminiFallbackProvider
 from router.providers.local_vllm import LocalVLLMProvider
 from router.providers.openai import (
@@ -32,11 +37,12 @@ from router.providers.openai import (
 )
 from router.providers.openai.models import OPENAI_MODELS_SLOT
 from router.schemas import JSONValue, RouterConfig, ROUTING_MODES, StreamingResponse
+from router.tool_loop import ToolLoopEngine, ToolLoopError
 from router.tools.example_tools import register_example_tools
 from router.tools.orchestrator import ToolOrchestrator
 from router.tools.policy import ToolExecutionDeniedError, ToolPolicy
-from router.tools.registry import ToolNotFoundError, ToolRegistry
-from router.tools.types import ToolCall, ToolContext
+from router.tools.registry import ToolRegistry
+from router.tools.types import ToolCall, ToolContext, ToolSpec
 
 CAPABILITIES_SCHEMA_VERSION = "1"
 ROUTER_VERSION = "0.1.0"
@@ -96,6 +102,11 @@ class RouterApplication:
         self.tool_orchestrator = ToolOrchestrator(
             registry=self.tool_registry,
             policy=self.tool_policy,
+        )
+        self.tool_loop_engine = ToolLoopEngine(
+            tool_orchestrator=self.tool_orchestrator,
+            max_tool_steps=config.max_tool_steps,
+            tool_timeout_s=config.tool_timeout_s,
         )
 
     def healthcheck(self) -> tuple[int, JSONValue]:
@@ -164,6 +175,13 @@ class RouterApplication:
                     "openai_realtime": self.config.openai_realtime_model,
                 },
                 "openai": _build_openai_capabilities(self.config),
+                "tool_loop": {
+                    "implemented": True,
+                    "max_tool_steps": self.config.max_tool_steps,
+                    "tool_timeout_s": self.config.tool_timeout_s,
+                    "single_tool_call_per_step": True,
+                    "parallel_tool_calls": False,
+                },
                 "tools": [
                     {
                         "name": spec.name,
@@ -180,8 +198,9 @@ class RouterApplication:
                     "automatic provider selection beyond auto -> local",
                     "openai_realtime router execution path",
                     "openai_agent orchestration layer",
-                    "automatic tool-call extraction from model output",
-                    "multi-step tool loops",
+                    "multiple tool calls per model step",
+                    "parallel tool calls",
+                    "gemini native tool-call translation",
                     "agents and MCP integration",
                 ],
             },
@@ -205,11 +224,35 @@ class RouterApplication:
             return exc.status_code, exc.payload
 
         _log_route_selection(selection, streaming=False)
-        payload_with_slot = _with_provider_slot(payload, selection.provider_slot)
-        return self._run_provider_action(
-            selection.provider_name,
-            lambda provider: provider.chat_completions(payload_with_slot),
-        )
+        try:
+            generation_request = self._build_generation_request(
+                payload=payload,
+                provider_slot=selection.provider_slot,
+            )
+            result = asyncio.run(
+                self.tool_loop_engine.run(
+                    provider=self.providers[selection.provider_name],
+                    request=generation_request,
+                    request_id=cast(str, generation_request.metadata["request_id"]),
+                    allowed_tools=_allowed_tool_names(payload.get("allowed_tools")),
+                )
+            )
+        except ValueError as exc:
+            return HTTPStatus.BAD_REQUEST, _error_payload("invalid_messages", str(exc))
+        except ToolLoopError as exc:
+            return exc.status_code, exc.payload
+        except ProviderError as exc:
+            _log_provider_error(
+                provider_name=selection.provider_name,
+                error=exc,
+                streaming=False,
+            )
+            return exc.status_code, normalize_provider_error(exc)
+
+        response = cast(dict[str, JSONValue], generation_to_chat_completion(result.generation))
+        if result.tool_steps:
+            response["tool_steps"] = result.tool_steps
+        return HTTPStatus.OK, response
 
     def stream_chat_completions(self, payload: dict[str, JSONValue]) -> StreamingResponse:
         selection = select_provider(
@@ -238,41 +281,27 @@ class RouterApplication:
 
     def execute_tool_call(self, payload: dict[str, JSONValue]) -> tuple[int, JSONValue]:
         tool_call_payload = cast(dict[str, JSONValue], payload["tool_call"])
-        allowed_tools = payload.get("allowed_tools")
-        tool_name = cast(str, tool_call_payload["name"])
-
-        if isinstance(allowed_tools, list) and tool_name not in allowed_tools:
-            return HTTPStatus.FORBIDDEN, _error_payload(
-                "tool_not_allowed",
-                f"tool={tool_name} is not permitted by allowed_tools for this request.",
-            )
-
         tool_call = ToolCall(
             call_id=f"toolcall-{uuid4().hex}",
-            name=tool_name,
+            name=cast(str, tool_call_payload["name"]),
             arguments=cast(dict[str, JSONValue], tool_call_payload["arguments"]),
         )
-        ctx = ToolContext(request_id=f"req-{uuid4().hex}")
 
         try:
-            result = asyncio.run(self.tool_orchestrator.run(tool_call, ctx))
-        except ToolNotFoundError as exc:
-            return HTTPStatus.NOT_FOUND, _error_payload("tool_not_found", str(exc))
-        except ToolExecutionDeniedError as exc:
-            return HTTPStatus.FORBIDDEN, _error_payload(
-                "tool_execution_denied",
-                str(exc),
+            result = asyncio.run(
+                self.tool_loop_engine.run_tool_call(
+                    tool_call=tool_call,
+                    request_id=f"req-{uuid4().hex}",
+                    current_tool_step=0,
+                    allowed_tools=_allowed_tool_names(payload.get("allowed_tools")),
+                )
             )
-        except Exception as exc:
-            return HTTPStatus.INTERNAL_SERVER_ERROR, _error_payload(
-                "tool_execution_failed",
-                str(exc),
-            )
+        except ToolLoopError as exc:
+            return exc.status_code, exc.payload
 
-        output_text = result.output_text
-        if output_text is None and result.output_json is not None:
-            output_text = json.dumps(result.output_json)
-
+        output_text = result.output_text or (
+            json.dumps(result.output_json) if result.output_json is not None else ""
+        )
         return (
             HTTPStatus.OK,
             {
@@ -288,9 +317,61 @@ class RouterApplication:
                         "finish_reason": "stop",
                     }
                 ],
-                "tool_result": asdict(result),
+                "tool_result": {
+                    "call_id": result.call_id,
+                    "name": result.name,
+                    "ok": result.ok,
+                    "output_text": result.output_text,
+                    "output_json": result.output_json,
+                    "error_code": result.error_code,
+                    "error_message": result.error_message,
+                    "metadata": result.metadata,
+                },
             },
         )
+
+    def _build_generation_request(
+        self,
+        *,
+        payload: dict[str, JSONValue],
+        provider_slot: str | None,
+    ) -> GenerationRequest:
+        request_id = f"req-{uuid4().hex}"
+        return GenerationRequest(
+            messages=request_messages_from_payload(payload),
+            tools=self._resolve_request_tools(
+                allowed_tool_names=_allowed_tool_names(payload.get("allowed_tools")),
+                request_id=request_id,
+            ),
+            model=_resolve_model_hint(payload.get("model")),
+            provider_slot=provider_slot,
+            temperature=_float_field(payload.get("temperature")),
+            top_p=_float_field(payload.get("top_p")),
+            max_tokens=_int_field(payload.get("max_tokens")),
+            metadata={"request_id": request_id},
+        )
+
+    def _resolve_request_tools(
+        self,
+        *,
+        allowed_tool_names: set[str] | None,
+        request_id: str,
+    ) -> list[ToolSpec]:
+        tool_specs: list[ToolSpec] = []
+        ctx = ToolContext(
+            request_id=request_id,
+            max_tool_steps=self.config.max_tool_steps,
+            tool_timeout_s=self.config.tool_timeout_s,
+        )
+        for spec in self.tool_registry.list_specs():
+            if allowed_tool_names is not None and spec.name not in allowed_tool_names:
+                continue
+            try:
+                self.tool_policy.check(spec, ctx)
+            except ToolExecutionDeniedError:
+                continue
+            tool_specs.append(spec)
+        return tool_specs
 
     def _run_provider_action(
         self,
@@ -534,6 +615,39 @@ def _extract_error_type(payload: JSONValue) -> str | None:
         error_type = error_payload.get("type")
         if isinstance(error_type, str):
             return error_type
+    return None
+
+
+def _allowed_tool_names(allowed_tools: JSONValue) -> set[str] | None:
+    if allowed_tools is None:
+        return None
+    if not isinstance(allowed_tools, list):
+        return None
+    return {
+        item.strip()
+        for item in allowed_tools
+        if isinstance(item, str) and item.strip()
+    }
+
+
+def _resolve_model_hint(model: JSONValue) -> str | None:
+    if not isinstance(model, str):
+        return None
+    normalized_model = model.strip()
+    if not normalized_model or normalized_model.lower() in MODEL_AUTO_ALIASES:
+        return None
+    return normalized_model
+
+
+def _float_field(value: JSONValue) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _int_field(value: JSONValue) -> int | None:
+    if isinstance(value, int):
+        return value
     return None
 
 
@@ -862,6 +976,10 @@ def validate_config(config: RouterConfig) -> None:
         errors.append("INFRA_AI_ROUTER_PORT must be between 1 and 65535.")
     if config.request_timeout_s <= 0:
         errors.append("INFRA_AI_REQUEST_TIMEOUT_S must be greater than 0.")
+    if config.max_tool_steps <= 0:
+        errors.append("INFRA_AI_MAX_TOOL_STEPS must be greater than 0.")
+    if config.tool_timeout_s <= 0:
+        errors.append("INFRA_AI_TOOL_TIMEOUT_S must be greater than 0.")
 
     if _is_blank(config.local_vllm_base_url):
         errors.append("INFRA_AI_LOCAL_VLLM_BASE_URL must not be empty.")
@@ -929,6 +1047,8 @@ def load_config() -> RouterConfig:
         host=os.environ.get("INFRA_AI_ROUTER_HOST", "127.0.0.1"),
         port=int(os.environ.get("INFRA_AI_ROUTER_PORT", "8010")),
         request_timeout_s=float(os.environ.get("INFRA_AI_REQUEST_TIMEOUT_S", "120")),
+        max_tool_steps=int(os.environ.get("INFRA_AI_MAX_TOOL_STEPS", "4")),
+        tool_timeout_s=float(os.environ.get("INFRA_AI_TOOL_TIMEOUT_S", "30")),
         local_vllm_base_url=os.environ.get(
             "INFRA_AI_LOCAL_VLLM_BASE_URL",
             "http://127.0.0.1:8000/v1",

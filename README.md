@@ -143,9 +143,10 @@ Der aktuelle Router-Vertrag ist bewusst klein, aber hart:
 - `POST /v1/chat/completions` wird frueh und strikt validiert, bevor Providerlogik ausgefuehrt wird.
 - Fehler werden fuer Frontends konsistent als `{"error":{"type":"...","message":"..."}}` ausgegeben.
 - Provideraufrufe unterliegen einem routergesteuerten Timeout ueber `INFRA_AI_REQUEST_TIMEOUT_S`.
+- Nicht-streamende Chat-Requests koennen ueber einen routergesteuerten Tool-Loop bis `INFRA_AI_MAX_TOOL_STEPS` automatisch Tools ausfuehren.
 - Streaming ist aktuell nur fuer den lokalen Pfad ueber den Router vorgesehen.
 - `GET /v1/models` bleibt vorerst ein lokaler Kompatibilitaetspfad und ist noch kein aggregiertes Multi-Provider-Discovery-API.
-- Bewusst noch nicht enthalten sind Tool-Use, Agents, MCP, RAG und intelligente Autowahl zwischen Providern.
+- Bewusst noch nicht enthalten sind Agents, MCP, RAG, parallele Tool-Calls und intelligente Autowahl zwischen Providern.
 
 ## Repository Layout
 
@@ -171,6 +172,7 @@ Er liefert nur oeffentliche, aus der aktuellen Konfiguration ableitbare Informat
 - `enabled_providers`
 - `streaming_support`
 - `default_models`
+- `tool_loop`
 - `schema_version`
 - `router_version`
 - `not_yet_supported`
@@ -221,16 +223,48 @@ Die eigentliche Implementierung eines Tools ist bewusst vom Router entkoppelt.
 
 Eine detaillierte Anleitung zum Schreiben eines Tools steht in [docs/tools.md](/home/visimeos/Projects/infra-ai/docs/tools.md).
 
-Aktuell ist die Router-Integration bewusst klein:
+Aktuell ist die Router-Integration bewusst klein, aber nicht mehr rein manuell:
 
-- `POST /v1/chat/completions` akzeptiert optional ein Feld `tool_call`
 - `POST /v1/chat/completions` akzeptiert optional ein Feld `allowed_tools`
+- der Router normalisiert Modellantworten intern provider-unabhaengig, erkennt einzelne Tool-Calls und fuehrt sie kontrolliert aus
+- pro Modellschritt ist in V1 genau ein Tool-Call erlaubt
+- Tool-Ergebnisse werden als interne Tool-Nachrichten wieder in den Modellkontext eingespeist
+- der Loop bricht spaetestens nach `INFRA_AI_MAX_TOOL_STEPS` ab
+- der explizite Debug-Pfad ueber `tool_call` bleibt erhalten
 - derzeit ist nur das Beispieltool `echo` registriert
-- `tool_call` ist ein expliziter Router-Pfad und noch keine allgemeine LLM-Tool-Calling-Implementierung
 - `GET /v1/router/capabilities` liefert kleine Tool-Metadaten fuer spaetere Frontend-Auswahl
 - eine spaetere klickbare oder waehlbare Tool-UI gehoert ins CLI/TUI-Frontend, nicht in den Router
 
+Interner Ablauf:
+
+```text
+Chat Request
+-> Router Orchestrator
+-> Provider Adapter
+-> Normalized Model Output
+-> Tool Loop Decision
+-> Tool Execution
+-> Tool Result Injection
+-> Next Model Step
+-> Final Response
+```
+
 Beispiel:
+
+```json
+{
+  "model": "auto",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Wenn sinnvoll, nutze das echo-Tool fuer die Antwort."
+    }
+  ],
+  "allowed_tools": ["echo"]
+}
+```
+
+Der explizite Debug-Pfad ist weiterhin separat verfuegbar:
 
 ```json
 {

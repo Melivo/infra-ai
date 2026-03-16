@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 
 from router.tools.policy import ToolPolicy
 from router.tools.registry import ToolRegistry
 from router.tools.types import ToolCall, ToolContext, ToolResult
+from router.tools.validation import validate_tool_arguments
 
 
 class ToolOrchestrationError(Exception):
     """Base error for tool orchestration failures."""
+
+
+class ToolExecutionTimeoutError(ToolOrchestrationError):
+    """Raised when a tool exceeds the configured timeout."""
 
 
 class ToolOrchestrator:
@@ -24,6 +30,15 @@ class ToolOrchestrator:
         executor = self._registry.get_executor(call.name)
 
         self._policy.check(spec, ctx)
+        validate_tool_arguments(spec.input_schema, call.arguments)
 
         execution_ctx = replace(ctx, current_tool_step=ctx.current_tool_step + 1)
-        return await executor.execute(call, execution_ctx)
+        try:
+            return await asyncio.wait_for(
+                executor.execute(call, execution_ctx),
+                timeout=ctx.tool_timeout_s,
+            )
+        except TimeoutError as exc:
+            raise ToolExecutionTimeoutError(
+                f"tool timed out after {ctx.tool_timeout_s} seconds: {call.name}"
+            ) from exc

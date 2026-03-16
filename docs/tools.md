@@ -1,98 +1,96 @@
 # Tools
 
-Der Tool Execution Layer von `infra-ai` ist router-zentriert aufgebaut.
+Der Tool Execution Layer von `infra-ai` bleibt router-zentriert.
 
-Der Router bleibt die kontrollierende Instanz. Tools sind weder Frontend-Logik noch Provider-Logik. Ein Tool wird ueber einen klaren internen Vertrag beschrieben, registriert und spaeter kontrolliert ausgefuehrt.
+Der Router ist die einzige Instanz, die Tool-Calls erkennt, prueft und ausfuehrt. Frontends liefern nur Requests und optional `allowed_tools`. Provider liefern Rohantworten, aber keine Tool-Steuerung.
 
-## Aktueller Stand
+## V1-Stand
 
-Aktuell existieren die grundlegenden Bausteine:
-
-- `ToolSpec`, `ToolCall`, `ToolResult`, `ToolContext`, `ToolExecutor` in `router/tools/types.py`
-- `ToolRegistry` in `router/tools/registry.py`
-- `ToolPolicy` in `router/tools/policy.py`
-- `ToolOrchestrator` in `router/tools/orchestrator.py`
-
-Der Layer ist damit vorbereitet, aber noch nicht in den Router-Request-Flow integriert.
-
-Aktuell gibt es einen ersten minimalen Integrationspfad ueber `POST /v1/chat/completions` mit einem expliziten `tool_call`-Feld. Dieser Pfad ist bewusst klein gehalten und dient nur dazu, die bestehende Tool-Pipeline kontrolliert ueber den Router nutzbar zu machen.
-
-Zusätzlich kann ein Request aktuell ein Feld `allowed_tools` mitsenden. Das ist eine kleine clientseitige Allowlist, mit der spaetere Frontends wie CLI oder TUI explizit steuern koennen, welche Tools fuer genau diesen Request freigegeben sind.
-
-## Grundmodell
+Der aktuelle V1-Flow ist jetzt in den normalen Router-Request-Pfad integriert:
 
 ```text
-ToolCall
+Chat Request
+-> Provider Adapter
+-> NormalizedGeneration
+-> ToolLoopEngine
 -> ToolOrchestrator
 -> ToolRegistry
 -> ToolPolicy
 -> ToolExecutor
+-> ToolResult
+-> Tool-Nachricht zurueck in den Modellkontext
 ```
 
-Die Rollen sind bewusst getrennt:
+Der bisherige explizite Debug-Pfad ueber `tool_call` in `POST /v1/chat/completions` bleibt weiterhin erhalten und nutzt dieselbe Tool-Ausfuehrungsschicht.
 
-- `ToolSpec` beschreibt Name, Beschreibung, Eingabeschema, Risk-Level und Capabilities eines Tools.
-- `ToolExecutor` kapselt die eigentliche Ausfuehrung.
-- `ToolRegistry` verwaltet die Zuordnung von Toolnamen zu `ToolSpec` und `ToolExecutor`.
-- `ToolPolicy` entscheidet, ob ein Tool im aktuellen Kontext ausgefuehrt werden darf.
-- `ToolOrchestrator` fuehrt Lookup, Policy-Check und Executor-Aufruf zusammen.
+## Interne Bausteine
 
-## Wie ein Tool aufgebaut ist
+- `NormalizedToolCall`, `NormalizedMessage`, `NormalizedGeneration`, `GenerationRequest` in `router/normalization.py`
+- `ToolSpec`, `ToolCall`, `ToolResult`, `ToolContext`, `ToolExecutor` in `router/tools/types.py`
+- `ToolRegistry` in `router/tools/registry.py`
+- `ToolPolicy` in `router/tools/policy.py`
+- `ToolOrchestrator` in `router/tools/orchestrator.py`
+- `ToolLoopEngine` in `router/tool_loop.py`
 
-Ein Tool besteht im Kern aus drei Teilen:
+## Router-Verhalten
 
-1. einer `ToolSpec`
-2. einem `ToolExecutor`
-3. der Registrierung in der `ToolRegistry`
+V1 unterstuetzt:
 
-Die Tool-Implementierung selbst bleibt bewusst von Router-Endpunkten, Provider-Logik und Frontends entkoppelt.
+- provider-unabhaengige Normalisierung von Modellantworten
+- automatische Erkennung genau eines Tool-Calls pro Modellschritt
+- Allowlist-Nutzung ueber `allowed_tools`
+- Policy- und Schema-Validierung vor der Tool-Ausfuehrung
+- Rueckgabe des Tool-Results in den Modellkontext als interne Tool-Nachricht
+- Abbruch nach `INFRA_AI_MAX_TOOL_STEPS`
+- Tool-Timeout ueber `INFRA_AI_TOOL_TIMEOUT_S`
 
-## Minimaler Ablauf
+V1 unterstuetzt bewusst noch nicht:
 
-Der aktuelle Zielablauf fuer einen normalisierten Tool-Aufruf ist:
+- mehrere Tool-Calls in einem Modellschritt
+- parallele Tool-Calls
+- persistente Agent-Memory
+- MCP
+- RAG
+- Workflow- oder Background-Engines
 
-1. Ein `ToolCall` liegt bereits in normalisierter Form vor.
-2. Der `ToolOrchestrator` holt `ToolSpec` und `ToolExecutor` aus der `ToolRegistry`.
-3. Die `ToolPolicy` prueft, ob das Tool im aktuellen `ToolContext` erlaubt ist.
-4. Erst danach fuehrt der `ToolExecutor` den Aufruf aus.
-5. Das Ergebnis wird als `ToolResult` zurueckgegeben.
+## Normalisierte Datenmodelle
 
-## Was ein Tool aktuell noch nicht leisten muss
+Der Router arbeitet intern nicht direkt mit OpenAI-, Gemini- oder vLLM-Rohformaten.
 
-Bewusst noch nicht Teil des aktuellen Tool Layers sind:
+- `NormalizedMessage` bildet System-, User-, Assistant- und Tool-Nachrichten ab.
+- `NormalizedToolCall` bildet einen einzelnen provider-unabhaengigen Tool-Aufruf ab.
+- `NormalizedGeneration` kapselt die normalisierte Modellantwort eines Schritts inklusive optionaler Tool-Calls und Metadaten.
+- `GenerationRequest` beschreibt den provider-unabhaengigen Input fuer den naechsten Modellschritt inklusive normalisierter Nachrichten und der erlaubten Tool-Spezifikationen.
 
-- API-Exposure
-- Tool-Erkennung aus Modellantworten
-- Multi-Step-Orchestrierung
-- Agent-Logik
-- MCP-Integration
-- JSON-Schema-Validierung
-- Workspace-Pfadvalidierung
-- HTTP-Allowlist-Logik
+## Fehlervertrag
+
+Der Router liefert Tool-Loop-Fehler weiterhin im bestehenden Error-Envelope:
+
+```json
+{
+  "error": {
+    "type": "tool_not_allowed",
+    "message": "..."
+  }
+}
+```
+
+V1 behandelt dabei mindestens:
+
+- `tool_not_found`
+- `tool_not_allowed`
+- `invalid_tool_arguments`
+- `tool_execution_failed`
+- `tool_timeout`
+- `max_tool_steps_exceeded`
+- `invalid_model_tool_call`
 
 ## Aktuelles Beispieltool
 
-Der Router registriert aktuell nur ein minimales Beispieltool:
+Der Router registriert aktuell nur das Beispieltool `echo`.
 
-- `echo`
+`echo` gibt die uebergebenen Argumente unveraendert als `ToolResult` zurueck. Es dient als Infrastrukturtest fuer Registry, Policy, Orchestrator und den automatischen Loop.
 
-`echo` gibt die uebergebenen Argumente unveraendert als `ToolResult` zurueck. Das Tool dient nur als Infrastrukturtest fuer Registry, Policy, Orchestrator und den minimalen Router-Integrationspfad.
+## Ausblick
 
-`GET /v1/router/capabilities` liefert dafuer bereits kleine Tool-Metadaten:
-
-- `name`
-- `description`
-- `risk_level`
-- `capabilities`
-- `enabled_by_default`
-
-Eine spaetere klickbare oder waehlbare Tool-Auswahl ist Aufgabe eines Frontends. Der Router stellt dafuer nur die Metadaten und die Request-Allowlist bereit.
-
-## Leitlinien fuer spaetere Tool-Implementierungen
-
-- Tools bleiben klein und fokussiert.
-- Tool-Ausfuehrung bleibt unter Router-Kontrolle.
-- Keine stillen Fallbacks.
-- Keine Tool-spezifische Logik in Frontends.
-- Keine Vermischung von Registry, Policy und Ausfuehrung.
-- Fehler und Sicherheitsregeln werden spaeter zentral ueber den Router und die Policy konsolidiert.
+Die aktuelle Normalisierungsschicht ist bewusst klein gehalten, damit spaetere Erweiterungen wie MCP-, RAG- oder Agent-Layer auf derselben Router-internen Struktur aufsetzen koennen, ohne Frontend- oder Provider-Logik zu vermischen.

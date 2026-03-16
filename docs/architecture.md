@@ -39,6 +39,8 @@ The router controls:
 - request validation
 - routing modes and policies
 - provider selection
+- provider response normalization
+- tool-loop orchestration
 - provider error normalization
 - timeout policy
 - streaming behavior at the platform boundary
@@ -63,6 +65,8 @@ Providers do not define the public platform contract on their own. The router do
 - no silent cloud fallback
 - normalized error contract for frontend clients
 - router-level provider timeouts
+- router-internal normalized model output
+- controlled automatic tool loop for non-streaming requests
 - minimal structured router logging
 - frontend-agnostic router boundary
 - provider modules behind a stable router API
@@ -70,10 +74,11 @@ Providers do not define the public platform contract on their own. The router do
 
 ## Not Yet Implemented
 
-- tool calling
 - agents
 - MCP integration
 - RAG or project context
 - workflow automation
+- parallel tool calls
+- multiple tool calls in one model step
 - IDE integration
 - browser companion

@@ -11,13 +11,14 @@ This includes:
 - strict request validation
 - normalized error contract
 - router-level provider timeouts
+- normalized provider-independent model output
+- controlled automatic tool loop in the router
 - minimal structured router logging
 - contract-oriented tests for chat and GET endpoints
 - CLI as a thin reference frontend
 
 ## Deferred / Explicitly Out of Scope for v0.1.0
 
-- tool calling
 - agents
 - MCP integration
 - RAG or project context
@@ -29,7 +30,6 @@ These items are intentionally deferred so the first public release can stay focu
 
 ## Next Major Expansion Paths
 
-- tool execution layer on top of the router
 - agent layer on top of tools
 - project context and RAG support
 - additional frontends on top of the same router contract

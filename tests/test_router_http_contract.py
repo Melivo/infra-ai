@@ -1,14 +1,22 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import unittest
 from email.message import Message
 from urllib.response import addinfourl
 
+from router.normalization import (
+    GenerationRequest,
+    NormalizedGeneration,
+    NormalizedMessage,
+    NormalizedToolCall,
+)
 from router.app import RouterApplication, RouterRequestHandler
 from router.providers.base import Provider, ProviderError
 from router.schemas import JSONValue, RouterConfig
+from router.tools.types import ToolCall, ToolContext, ToolResult, ToolRiskLevel, ToolSpec
 
 
 def build_config(**overrides: object) -> RouterConfig:
@@ -16,6 +24,8 @@ def build_config(**overrides: object) -> RouterConfig:
         host="127.0.0.1",
         port=8010,
         request_timeout_s=120.0,
+        max_tool_steps=4,
+        tool_timeout_s=30.0,
         local_vllm_base_url="http://127.0.0.1:8000/v1",
         local_vllm_default_model="Qwen/Qwen3-14B-AWQ",
         enable_gemini_fallback=False,
@@ -50,11 +60,19 @@ def build_payload(**overrides: object) -> dict[str, object]:
 
 
 class StubProvider(Provider):
-    def __init__(self, name: str, *, stream_supported: bool = False) -> None:
+    def __init__(
+        self,
+        name: str,
+        *,
+        stream_supported: bool = False,
+        generations: list[NormalizedGeneration] | None = None,
+    ) -> None:
         self.name = name
         self.stream_supported = stream_supported
-        self.last_payload: dict[str, JSONValue] | None = None
+        self.last_request: GenerationRequest | None = None
+        self.request_history: list[GenerationRequest] = []
         self.list_models_called = False
+        self._generation_iter = iter(generations or [])
 
     def list_models(self) -> tuple[int, JSONValue]:
         self.list_models_called = True
@@ -66,30 +84,28 @@ class StubProvider(Provider):
             },
         )
 
-    def chat_completions(self, payload: dict[str, JSONValue]) -> tuple[int, JSONValue]:
-        self.last_payload = dict(payload)
-        return (
-            200,
-            {
-                "id": f"{self.name}-chat",
-                "object": "chat.completion",
-                "provider": self.name,
-                "provider_slot": payload.get("provider_slot"),
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {"role": "assistant", "content": f"response from {self.name}"},
-                        "finish_reason": "stop",
-                    }
-                ],
-            },
+    def generate(self, request: GenerationRequest) -> NormalizedGeneration:
+        self.last_request = request
+        self.request_history.append(request)
+        generation = next(
+            self._generation_iter,
+            NormalizedGeneration(
+                message=NormalizedMessage(
+                    role="assistant",
+                    content=f"response from {self.name}",
+                ),
+                final=True,
+                response_id=f"{self.name}-chat",
+                provider_name=self.name,
+                provider_slot=request.provider_slot,
+            ),
         )
+        return generation
 
     def stream_chat_completions(self, payload: dict[str, JSONValue]) -> addinfourl:
         if not self.stream_supported:
             return super().stream_chat_completions(payload)
 
-        self.last_payload = dict(payload)
         headers = Message()
         headers["Content-Type"] = "text/event-stream"
         body = f"data: {{\"provider\": \"{self.name}\"}}\n\n".encode("utf-8")
@@ -113,13 +129,44 @@ class ErrorProvider(Provider):
     def list_models(self) -> tuple[int, JSONValue]:
         raise self.list_error or ProviderError("unexpected list error")
 
-    def chat_completions(self, payload: dict[str, JSONValue]) -> tuple[int, JSONValue]:
-        del payload
+    def generate(self, request: GenerationRequest) -> NormalizedGeneration:
+        del request
         raise self.chat_error or ProviderError("unexpected chat error")
 
     def stream_chat_completions(self, payload: dict[str, JSONValue]) -> addinfourl:
         del payload
         raise self.stream_error or ProviderError("unexpected stream error")
+
+
+class FailingExecutor:
+    async def execute(self, call: ToolCall, ctx: ToolContext) -> ToolResult:
+        del call
+        del ctx
+        return ToolResult(
+            call_id="fail-call",
+            name="failing_tool",
+            ok=False,
+            error_code="tool_execution_failed",
+            error_message="executor failed",
+        )
+
+
+class EchoExecutor:
+    async def execute(self, call: ToolCall, ctx: ToolContext) -> ToolResult:
+        del ctx
+        return ToolResult(
+            call_id=call.call_id,
+            name=call.name,
+            ok=True,
+            output_json=call.arguments,
+        )
+
+
+class SlowExecutor:
+    async def execute(self, call: ToolCall, ctx: ToolContext) -> ToolResult:
+        del call
+        await asyncio.sleep(ctx.tool_timeout_s + 0.05)
+        return ToolResult(call_id="slow-call", name="slow_tool", ok=True, output_text="done")
 
 
 class _NonClosingBytesIO(io.BytesIO):
@@ -372,9 +419,9 @@ class RouterHTTPContractTests(unittest.TestCase):
                 self.assertEqual(response_headers["content-type"], "application/json")
                 self.assertEqual(payload["provider"], provider_name)
 
-        self.assertIsNone(providers["local_vllm"].last_payload.get("provider_slot"))
+        self.assertIsNone(providers["local_vllm"].last_request.provider_slot)
         self.assertEqual(
-            providers["openai_responses"].last_payload.get("provider_slot"),
+            providers["openai_responses"].last_request.provider_slot,
             "openai_reasoning",
         )
 
@@ -401,9 +448,9 @@ class RouterHTTPContractTests(unittest.TestCase):
         self.assertEqual(payload["tool_result"]["ok"], True)
         self.assertEqual(payload["tool_result"]["output_json"], {"message": "hello"})
         self.assertEqual(payload["choices"][0]["message"]["role"], "assistant")
-        self.assertEqual(providers["local_vllm"].last_payload, None)
-        self.assertEqual(providers["gemini_fallback"].last_payload, None)
-        self.assertEqual(providers["openai_responses"].last_payload, None)
+        self.assertEqual(providers["local_vllm"].last_request, None)
+        self.assertEqual(providers["gemini_fallback"].last_request, None)
+        self.assertEqual(providers["openai_responses"].last_request, None)
 
     def test_tool_call_is_rejected_when_not_in_allowed_tools(self) -> None:
         app, providers = self.make_app(build_config())
@@ -424,9 +471,9 @@ class RouterHTTPContractTests(unittest.TestCase):
         self.assertEqual(status_code, 403)
         self.assertEqual(response_headers["content-type"], "application/json")
         self.assert_error_payload(payload, error_type="tool_not_allowed")
-        self.assertEqual(providers["local_vllm"].last_payload, None)
-        self.assertEqual(providers["gemini_fallback"].last_payload, None)
-        self.assertEqual(providers["openai_responses"].last_payload, None)
+        self.assertEqual(providers["local_vllm"].last_request, None)
+        self.assertEqual(providers["gemini_fallback"].last_request, None)
+        self.assertEqual(providers["openai_responses"].last_request, None)
 
     def test_chat_without_tool_call_keeps_existing_provider_path(self) -> None:
         app, providers = self.make_app(build_config())
@@ -441,7 +488,291 @@ class RouterHTTPContractTests(unittest.TestCase):
         self.assertEqual(status_code, 200)
         self.assertEqual(response_headers["content-type"], "application/json")
         self.assertEqual(payload["provider"], "local_vllm")
-        self.assertIsNotNone(providers["local_vllm"].last_payload)
+        self.assertIsNotNone(providers["local_vllm"].last_request)
+
+    def test_model_tool_call_is_executed_and_result_is_reinjected(self) -> None:
+        app, providers = self.make_app(build_config())
+        providers["local_vllm"] = StubProvider(
+            "local_vllm",
+            generations=[
+                NormalizedGeneration(
+                    message=NormalizedMessage(
+                        role="assistant",
+                        tool_calls=[
+                            NormalizedToolCall(
+                                call_id="call-1",
+                                name="echo",
+                                arguments={"message": "hello"},
+                            )
+                        ],
+                    ),
+                    final=False,
+                    finish_reason="tool_calls",
+                    response_id="step-1",
+                    provider_name="local_vllm",
+                ),
+                NormalizedGeneration(
+                    message=NormalizedMessage(role="assistant", content="done"),
+                    final=True,
+                    finish_reason="stop",
+                    response_id="step-2",
+                    provider_name="local_vllm",
+                ),
+            ],
+        )
+
+        status_code, _, payload = perform_json_request(
+            app,
+            method="POST",
+            path="/v1/chat/completions",
+            body=build_payload(allowed_tools=["echo"]),
+        )
+
+        self.assertEqual(status_code, 200)
+        self.assertEqual(payload["choices"][0]["message"]["content"], "done")
+        self.assertEqual(payload["tool_steps"], 1)
+        self.assertEqual(len(providers["local_vllm"].request_history), 2)
+        second_request = providers["local_vllm"].request_history[1]
+        self.assertEqual(second_request.messages[-2].role, "assistant")
+        self.assertEqual(second_request.messages[-2].tool_calls[0].name, "echo")
+        self.assertEqual(second_request.messages[-1].role, "tool")
+        self.assertEqual(second_request.messages[-1].content, "{\"message\": \"hello\"}")
+
+    def test_unknown_model_tool_call_returns_not_found(self) -> None:
+        app, providers = self.make_app(build_config())
+        providers["local_vllm"] = StubProvider(
+            "local_vllm",
+            generations=[
+                NormalizedGeneration(
+                    message=NormalizedMessage(
+                        role="assistant",
+                        tool_calls=[
+                            NormalizedToolCall(
+                                call_id="call-unknown",
+                                name="missing_tool",
+                                arguments={},
+                            )
+                        ],
+                    ),
+                    final=False,
+                    provider_name="local_vllm",
+                )
+            ],
+        )
+
+        status_code, _, payload = perform_json_request(
+            app,
+            method="POST",
+            path="/v1/chat/completions",
+            body=build_payload(),
+        )
+
+        self.assertEqual(status_code, 404)
+        self.assert_error_payload(payload, error_type="tool_not_found")
+
+    def test_disallowed_model_tool_call_returns_forbidden(self) -> None:
+        app, providers = self.make_app(build_config())
+        providers["local_vllm"] = StubProvider(
+            "local_vllm",
+            generations=[
+                NormalizedGeneration(
+                    message=NormalizedMessage(
+                        role="assistant",
+                        tool_calls=[
+                            NormalizedToolCall(
+                                call_id="call-echo",
+                                name="echo",
+                                arguments={"message": "blocked"},
+                            )
+                        ],
+                    ),
+                    final=False,
+                    provider_name="local_vllm",
+                )
+            ],
+        )
+
+        status_code, _, payload = perform_json_request(
+            app,
+            method="POST",
+            path="/v1/chat/completions",
+            body=build_payload(allowed_tools=[]),
+        )
+
+        self.assertEqual(status_code, 403)
+        self.assert_error_payload(payload, error_type="tool_not_allowed")
+
+    def test_max_tool_steps_stops_recursive_tool_loop(self) -> None:
+        app, providers = self.make_app(build_config(max_tool_steps=1))
+        providers["local_vllm"] = StubProvider(
+            "local_vllm",
+            generations=[
+                NormalizedGeneration(
+                    message=NormalizedMessage(
+                        role="assistant",
+                        tool_calls=[
+                            NormalizedToolCall(call_id="call-1", name="echo", arguments={"message": "1"})
+                        ],
+                    ),
+                    final=False,
+                    provider_name="local_vllm",
+                ),
+                NormalizedGeneration(
+                    message=NormalizedMessage(
+                        role="assistant",
+                        tool_calls=[
+                            NormalizedToolCall(call_id="call-2", name="echo", arguments={"message": "2"})
+                        ],
+                    ),
+                    final=False,
+                    provider_name="local_vllm",
+                ),
+            ],
+        )
+
+        status_code, _, payload = perform_json_request(
+            app,
+            method="POST",
+            path="/v1/chat/completions",
+            body=build_payload(allowed_tools=["echo"]),
+        )
+
+        self.assertEqual(status_code, 409)
+        self.assert_error_payload(payload, error_type="max_tool_steps_exceeded")
+
+    def test_invalid_tool_arguments_return_consistent_error(self) -> None:
+        app, providers = self.make_app(build_config())
+        app.tool_registry.register(
+            ToolSpec(
+                name="strict_echo",
+                description="Require a message string.",
+                input_schema={
+                    "type": "object",
+                    "properties": {"message": {"type": "string"}},
+                    "required": ["message"],
+                    "additionalProperties": False,
+                },
+                risk_level=ToolRiskLevel.LOW,
+                capabilities=["debug"],
+                enabled_by_default=True,
+            ),
+            EchoExecutor(),
+        )
+        providers["local_vllm"] = StubProvider(
+            "local_vllm",
+            generations=[
+                NormalizedGeneration(
+                    message=NormalizedMessage(
+                        role="assistant",
+                        tool_calls=[
+                            NormalizedToolCall(
+                                call_id="call-strict",
+                                name="strict_echo",
+                                arguments={},
+                            )
+                        ],
+                    ),
+                    final=False,
+                    provider_name="local_vllm",
+                )
+            ],
+        )
+
+        status_code, _, payload = perform_json_request(
+            app,
+            method="POST",
+            path="/v1/chat/completions",
+            body=build_payload(),
+        )
+
+        self.assertEqual(status_code, 400)
+        self.assert_error_payload(payload, error_type="invalid_tool_arguments")
+
+    def test_tool_execution_failure_returns_consistent_error(self) -> None:
+        app, providers = self.make_app(build_config())
+        app.tool_registry.register(
+            ToolSpec(
+                name="failing_tool",
+                description="Always fail.",
+                input_schema={"type": "object", "additionalProperties": True},
+                risk_level=ToolRiskLevel.LOW,
+                capabilities=["debug"],
+                enabled_by_default=True,
+            ),
+            FailingExecutor(),
+        )
+        providers["local_vllm"] = StubProvider(
+            "local_vllm",
+            generations=[
+                NormalizedGeneration(
+                    message=NormalizedMessage(
+                        role="assistant",
+                        tool_calls=[
+                            NormalizedToolCall(
+                                call_id="call-fail",
+                                name="failing_tool",
+                                arguments={},
+                            )
+                        ],
+                    ),
+                    final=False,
+                    provider_name="local_vllm",
+                )
+            ],
+        )
+
+        status_code, _, payload = perform_json_request(
+            app,
+            method="POST",
+            path="/v1/chat/completions",
+            body=build_payload(),
+        )
+
+        self.assertEqual(status_code, 500)
+        self.assert_error_payload(payload, error_type="tool_execution_failed")
+
+    def test_tool_timeout_returns_consistent_error(self) -> None:
+        app, providers = self.make_app(build_config(tool_timeout_s=0.01))
+        app.tool_registry.register(
+            ToolSpec(
+                name="slow_tool",
+                description="Sleep past the timeout.",
+                input_schema={"type": "object", "additionalProperties": True},
+                risk_level=ToolRiskLevel.LOW,
+                capabilities=["debug"],
+                enabled_by_default=True,
+            ),
+            SlowExecutor(),
+        )
+        providers["local_vllm"] = StubProvider(
+            "local_vllm",
+            generations=[
+                NormalizedGeneration(
+                    message=NormalizedMessage(
+                        role="assistant",
+                        tool_calls=[
+                            NormalizedToolCall(
+                                call_id="call-slow",
+                                name="slow_tool",
+                                arguments={},
+                            )
+                        ],
+                    ),
+                    final=False,
+                    provider_name="local_vllm",
+                )
+            ],
+        )
+
+        status_code, _, payload = perform_json_request(
+            app,
+            method="POST",
+            path="/v1/chat/completions",
+            body=build_payload(),
+        )
+
+        self.assertEqual(status_code, 504)
+        self.assert_error_payload(payload, error_type="tool_timeout")
 
     def test_disabled_routes_return_route_unavailable(self) -> None:
         app, _ = self.make_app(build_config())

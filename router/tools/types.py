@@ -56,6 +56,7 @@ class ToolContext:
     workspace_root: str | None = None
     max_tool_steps: int = 1
     current_tool_step: int = 0
+    tool_timeout_s: float = 30.0
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
