@@ -87,6 +87,17 @@ def tool_call_to_turn(tool_call: NormalizedToolCall) -> ConversationTurn:
     )
 
 
+def turn_to_tool_call(turn: ConversationTurn) -> NormalizedToolCall:
+    if turn.type != TurnType.TOOL_CALL:
+        raise ValueError(f"Expected a tool_call turn, got {turn.type!r}")
+    return NormalizedToolCall(
+        call_id=turn.tool_call_id or "",
+        name=turn.tool_name or "",
+        arguments=dict(turn.tool_arguments or {}),
+        metadata=dict(turn.metadata),
+    )
+
+
 def generation_to_turns(generation: NormalizedGeneration) -> list[ConversationTurn]:
     turns = message_to_turns(generation.message)
     if generation.final:
@@ -100,6 +111,47 @@ def generation_to_turns(generation: NormalizedGeneration) -> list[ConversationTu
             )
         )
     return turns
+
+
+def turns_to_generation(turns: list[ConversationTurn]) -> NormalizedGeneration:
+    assistant_turn: ConversationTurn | None = None
+    tool_call_turns: list[ConversationTurn] = []
+    final_turn: ConversationTurn | None = None
+
+    for turn in turns:
+        if turn.type == TurnType.ASSISTANT:
+            assistant_turn = turn
+            tool_call_turns = []
+            final_turn = None
+            continue
+        if turn.type == TurnType.TOOL_CALL and assistant_turn is not None and final_turn is None:
+            tool_call_turns.append(turn)
+            continue
+        if turn.type == TurnType.FINAL and assistant_turn is not None:
+            final_turn = turn
+
+    if assistant_turn is None:
+        raise ValueError("Conversation turns do not contain an assistant turn.")
+
+    metadata_source = final_turn or assistant_turn
+    usage = metadata_source.metadata.get("usage")
+    return NormalizedGeneration(
+        message=NormalizedMessage(
+            role="assistant",
+            content=assistant_turn.content,
+            content_json=assistant_turn.content_json,
+            tool_calls=[turn_to_tool_call(turn) for turn in tool_call_turns],
+            metadata=dict(assistant_turn.metadata),
+        ),
+        final=final_turn is not None,
+        finish_reason=_metadata_str(metadata_source.metadata, "finish_reason"),
+        response_id=_metadata_str(metadata_source.metadata, "response_id"),
+        model=_metadata_str(metadata_source.metadata, "model"),
+        provider_name=_metadata_str(metadata_source.metadata, "provider_name"),
+        provider_slot=_metadata_str(metadata_source.metadata, "provider_slot"),
+        usage=usage if isinstance(usage, dict) else None,
+        metadata=dict(metadata_source.metadata),
+    )
 
 
 def turn_to_message(turn: ConversationTurn) -> NormalizedMessage:
@@ -232,3 +284,8 @@ def _generation_metadata(generation: NormalizedGeneration) -> dict[str, JSONValu
     if generation.usage is not None:
         metadata["usage"] = generation.usage
     return metadata
+
+
+def _metadata_str(metadata: dict[str, JSONValue], key: str) -> str | None:
+    value = metadata.get(key)
+    return value if isinstance(value, str) else None

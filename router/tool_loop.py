@@ -8,9 +8,9 @@ import json
 from router.conversation import (
     ConversationTurn,
     TurnType,
-    generation_to_turns,
     messages_to_turns,
     tool_result_to_turn,
+    turn_to_tool_call,
     turns_to_messages,
 )
 from router.normalization import (
@@ -18,6 +18,7 @@ from router.normalization import (
     NormalizedGeneration,
     NormalizedToolCall,
 )
+from router.provider_output import parse_provider_generation, provider_output_to_generation
 from router.providers.base import Provider
 from router.schemas import JSONValue
 from router.tools.orchestrator import ToolExecutionTimeoutError, ToolOrchestrator
@@ -75,12 +76,15 @@ class ToolLoopEngine:
 
         while True:
             current_request = replace(request, messages=turns_to_messages(turns))
-            generation = provider.generate(current_request)
-            generation_turns = generation_to_turns(generation)
+            provider_output = provider.generate(current_request)
+            generation_turns = parse_provider_generation(provider_output)
             turns.extend(generation_turns)
             tool_call_turns = _tool_call_turns(generation_turns)
             if not tool_call_turns:
-                return ToolLoopResult(generation=generation, tool_steps=tool_steps)
+                return ToolLoopResult(
+                    generation=provider_output_to_generation(provider_output),
+                    tool_steps=tool_steps,
+                )
 
             if len(tool_call_turns) != 1:
                 raise ToolLoopError(
@@ -97,7 +101,7 @@ class ToolLoopEngine:
                 )
 
             tool_call_turn = tool_call_turns[0]
-            tool_call = _normalized_tool_call_from_turn(tool_call_turn)
+            tool_call = turn_to_tool_call(tool_call_turn)
             self._validate_model_tool_call(tool_call)
             tool_call_signature = _tool_call_signature(tool_call.name, tool_call.arguments)
             if tool_call_signature in recent_call_signatures:
@@ -241,12 +245,3 @@ def _tool_call_signature(name: str, arguments: dict[str, JSONValue]) -> str:
 
 def _tool_call_turns(turns: list[ConversationTurn]) -> list[ConversationTurn]:
     return [turn for turn in turns if turn.type == TurnType.TOOL_CALL]
-
-
-def _normalized_tool_call_from_turn(turn: ConversationTurn) -> NormalizedToolCall:
-    return NormalizedToolCall(
-        call_id=turn.tool_call_id or "",
-        name=turn.tool_name or "",
-        arguments=dict(turn.tool_arguments or {}),
-        metadata=dict(turn.metadata),
-    )

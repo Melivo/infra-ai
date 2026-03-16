@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 
-from router.normalization import GenerationRequest, NormalizedGeneration, NormalizedMessage
+from router.normalization import GenerationRequest, NormalizedMessage
+from router.provider_output import ProviderOutput
 from router.providers.base import Provider, ProviderError, request_json
 from router.schemas import JSONValue
 
@@ -38,7 +39,7 @@ class GeminiFallbackProvider(Provider):
         )
         return status_code, _translate_models(body)
 
-    def generate(self, request: GenerationRequest) -> NormalizedGeneration:
+    def generate(self, request: GenerationRequest) -> ProviderOutput:
         if not self.api_key or not self.default_model:
             raise _not_configured_error(
                 provider_type="gemini_fallback_not_configured",
@@ -62,7 +63,12 @@ class GeminiFallbackProvider(Provider):
             provider_name="gemini_fallback",
             payload=_build_gemini_payload(request),
         )
-        return _normalize_chat_response(body, model=model)
+        return ProviderOutput(
+            format="gemini_generate_content",
+            body=body,
+            provider_name="gemini_fallback",
+            fallback_model=model,
+        )
 
 
 def _build_gemini_payload(request: GenerationRequest) -> dict[str, JSONValue]:
@@ -167,57 +173,6 @@ def _translate_models(body: JSONValue) -> JSONValue:
         )
 
     return {"object": "list", "data": data}
-
-
-def _normalize_chat_response(body: JSONValue, *, model: str) -> NormalizedGeneration:
-    if not isinstance(body, dict):
-        return NormalizedGeneration(
-            message=NormalizedMessage(role="assistant", content=""),
-            final=True,
-            response_id="gemini-fallback",
-            model=model,
-            provider_name="gemini_fallback",
-        )
-
-    candidates = body.get("candidates")
-    usage = body.get("usageMetadata")
-    message_text = ""
-    finish_reason = "stop"
-
-    if isinstance(candidates, list) and candidates:
-        first_candidate = candidates[0]
-        if isinstance(first_candidate, dict):
-            finish_reason_value = first_candidate.get("finishReason")
-            if isinstance(finish_reason_value, str):
-                finish_reason = finish_reason_value.lower()
-
-            content = first_candidate.get("content")
-            if isinstance(content, dict):
-                parts = content.get("parts")
-                if isinstance(parts, list):
-                    text_parts: list[str] = []
-                    for part in parts:
-                        if isinstance(part, dict) and isinstance(part.get("text"), str):
-                            text_parts.append(part["text"])
-                    message_text = "".join(text_parts)
-
-    usage_payload: dict[str, JSONValue] | None = None
-    if isinstance(usage, dict):
-        usage_payload = {
-            "prompt_tokens": usage.get("promptTokenCount", 0),
-            "completion_tokens": usage.get("candidatesTokenCount", 0),
-            "total_tokens": usage.get("totalTokenCount", 0),
-        }
-
-    return NormalizedGeneration(
-        message=NormalizedMessage(role="assistant", content=message_text),
-        final=True,
-        finish_reason=finish_reason,
-        response_id="gemini-fallback",
-        model=model,
-        provider_name="gemini_fallback",
-        usage=usage_payload,
-    )
 
 
 def _model_path(model: str) -> str:

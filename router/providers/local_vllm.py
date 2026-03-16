@@ -5,10 +5,9 @@ from urllib.response import addinfourl
 
 from router.normalization import (
     GenerationRequest,
-    NormalizedGeneration,
     NormalizedMessage,
-    NormalizedToolCall,
 )
+from router.provider_output import ProviderOutput
 from router.providers.base import Provider, ProviderError, request_json, request_stream
 from router.schemas import JSONValue
 from router.tools.types import ToolSpec
@@ -25,7 +24,7 @@ class LocalVLLMProvider(Provider):
     def list_models(self) -> tuple[int, JSONValue]:
         return self._request("GET", "/models")
 
-    def generate(self, request: GenerationRequest) -> NormalizedGeneration:
+    def generate(self, request: GenerationRequest) -> ProviderOutput:
         payload = _build_openai_chat_payload(request, default_model=self.default_model)
         _, body = request_json(
             method="POST",
@@ -34,8 +33,9 @@ class LocalVLLMProvider(Provider):
             provider_name="local_vllm",
             payload=payload,
         )
-        return _normalize_openai_chat_response(
-            body,
+        return ProviderOutput(
+            format="openai_chat_completion",
+            body=body,
             provider_name=self.name,
             provider_slot=request.provider_slot,
             fallback_model=str(payload.get("model")) if isinstance(payload.get("model"), str) else None,
@@ -158,134 +158,3 @@ def _tool_spec_to_openai_tool(tool: ToolSpec) -> JSONValue:
         },
     }
 
-
-def _normalize_openai_chat_response(
-    body: JSONValue,
-    *,
-    provider_name: str,
-    provider_slot: str | None,
-    fallback_model: str | None,
-) -> NormalizedGeneration:
-    if not isinstance(body, dict):
-        return NormalizedGeneration(
-            message=NormalizedMessage(role="assistant", content=""),
-            final=True,
-            provider_name=provider_name,
-            provider_slot=provider_slot,
-            model=fallback_model,
-        )
-
-    choices = body.get("choices")
-    if not isinstance(choices, list) or not choices:
-        return NormalizedGeneration(
-            message=NormalizedMessage(role="assistant", content=""),
-            final=True,
-            response_id=body.get("id") if isinstance(body.get("id"), str) else None,
-            provider_name=provider_name,
-            provider_slot=provider_slot,
-            model=body.get("model") if isinstance(body.get("model"), str) else fallback_model,
-        )
-
-    first_choice = choices[0]
-    if not isinstance(first_choice, dict):
-        raise _invalid_tool_call_error("OpenAI-compatible provider returned an invalid choice payload.")
-
-    message_payload = first_choice.get("message")
-    if not isinstance(message_payload, dict):
-        raise _invalid_tool_call_error("OpenAI-compatible provider returned a choice without a message.")
-
-    tool_calls = _extract_openai_tool_calls(message_payload.get("tool_calls"))
-    content = _extract_openai_message_content(message_payload.get("content"))
-    finish_reason = first_choice.get("finish_reason")
-    usage = body.get("usage")
-
-    return NormalizedGeneration(
-        message=NormalizedMessage(
-            role="assistant",
-            content=content,
-            tool_calls=tool_calls,
-        ),
-        final=not tool_calls,
-        finish_reason=finish_reason if isinstance(finish_reason, str) else None,
-        response_id=body.get("id") if isinstance(body.get("id"), str) else None,
-        model=body.get("model") if isinstance(body.get("model"), str) else fallback_model,
-        provider_name=provider_name,
-        provider_slot=provider_slot,
-        usage=usage if isinstance(usage, dict) else None,
-    )
-
-
-def _extract_openai_message_content(content: JSONValue) -> str:
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        text_parts: list[str] = []
-        for item in content:
-            if isinstance(item, str):
-                text_parts.append(item)
-                continue
-            if (
-                isinstance(item, dict)
-                and item.get("type") in {"text", "output_text"}
-                and isinstance(item.get("text"), str)
-            ):
-                text_parts.append(item["text"])
-        return "".join(text_parts)
-    return ""
-
-
-def _extract_openai_tool_calls(tool_calls_payload: JSONValue) -> list[NormalizedToolCall]:
-    if tool_calls_payload is None:
-        return []
-    if not isinstance(tool_calls_payload, list):
-        raise _invalid_tool_call_error("OpenAI-compatible provider returned a non-list tool_calls payload.")
-
-    normalized_calls: list[NormalizedToolCall] = []
-    for item in tool_calls_payload:
-        if not isinstance(item, dict):
-            raise _invalid_tool_call_error("OpenAI-compatible provider returned an invalid tool_calls entry.")
-        call_id = item.get("id")
-        function_payload = item.get("function")
-        if not isinstance(call_id, str) or not isinstance(function_payload, dict):
-            raise _invalid_tool_call_error("OpenAI-compatible provider returned a malformed tool call envelope.")
-        if not call_id.strip():
-            raise _invalid_tool_call_error("OpenAI-compatible provider returned a tool call without a valid id.")
-        name = function_payload.get("name")
-        arguments_raw = function_payload.get("arguments")
-        if not isinstance(name, str) or not name.strip():
-            raise _invalid_tool_call_error("OpenAI-compatible provider returned a tool call without a name.")
-        arguments = _parse_tool_arguments(arguments_raw)
-        normalized_calls.append(
-            NormalizedToolCall(
-                call_id=call_id,
-                name=name,
-                arguments=arguments,
-            )
-        )
-    return normalized_calls
-
-
-def _parse_tool_arguments(arguments_raw: JSONValue) -> dict[str, JSONValue]:
-    if isinstance(arguments_raw, dict):
-        return arguments_raw
-    if isinstance(arguments_raw, str):
-        try:
-            arguments = json.loads(arguments_raw)
-        except json.JSONDecodeError as exc:
-            raise _invalid_tool_call_error("Model returned tool arguments that are not valid JSON.") from exc
-        if isinstance(arguments, dict):
-            return arguments
-    raise _invalid_tool_call_error("Model returned tool arguments that are not a JSON object.")
-
-
-def _invalid_tool_call_error(message: str) -> ProviderError:
-    return ProviderError(
-        message,
-        status_code=502,
-        payload={
-            "error": {
-                "type": "invalid_model_tool_call",
-                "message": message,
-            }
-        },
-    )

@@ -8,6 +8,7 @@ from urllib.response import addinfourl
 from urllib import error, request
 
 from router.normalization import GenerationRequest, NormalizedGeneration
+from router.provider_output import ProviderOutput, provider_output_to_generation
 from router.schemas import JSONValue
 
 AUTO_MODEL_ALIASES = {"", "auto", "default", "router-default"}
@@ -47,11 +48,11 @@ class Provider(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def generate(self, request: GenerationRequest) -> NormalizedGeneration:
+    def generate(self, request: GenerationRequest) -> ProviderOutput:
         raise NotImplementedError
 
     def chat_completions(self, request: GenerationRequest) -> tuple[int, JSONValue]:
-        generation = self.generate(request)
+        generation = provider_output_to_generation(self.generate(request))
         return 200, generation_to_chat_completion(generation)
 
     def stream_chat_completions(self, payload: dict[str, JSONValue]) -> addinfourl:
