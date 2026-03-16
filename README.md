@@ -118,6 +118,7 @@ bash scripts/stop.sh
 
 `scripts/start.sh` startet `vLLM` und den Router im Hintergrund. Der Router schreibt dabei nach `~/.ai/logs/router.log`.
 Falls `.venv` noch nicht existiert, legt das Skript sie an und installiert `requirements.txt`, bevor der Router gestartet wird.
+Die Router-PID liegt stabil unter `~/.ai/run/router.pid`; das Script prueft ausserdem, ob diese PID wirklich zu `router.app` gehoert, bevor es einen zweiten Start blockiert oder beim Stoppen beendet.
 
 Aktuell exponiert er:
 
