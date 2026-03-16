@@ -1,3 +1,5 @@
+"""Compatibility-layer models for request parsing and provider-facing message serialization."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

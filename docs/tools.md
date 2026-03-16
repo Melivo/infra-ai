@@ -11,7 +11,9 @@ Der aktuelle V1-Flow ist jetzt in den normalen Router-Request-Pfad integriert:
 ```text
 Chat Request
 -> Provider Adapter
--> NormalizedGeneration
+-> ProviderOutput
+-> Provider Output Parser
+-> ConversationTurn
 -> ToolLoopEngine
 -> ToolOrchestrator
 -> ToolRegistry
@@ -25,7 +27,9 @@ Der bisherige explizite Debug-Pfad ueber `tool_call` in `POST /v1/chat/completio
 
 ## Interne Bausteine
 
-- `NormalizedToolCall`, `NormalizedMessage`, `NormalizedGeneration`, `GenerationRequest` in `router/normalization.py`
+- `ConversationTurn`, `TurnType` und Turn-/Message-Mappings in `router/conversation.py`
+- `ProviderOutput` plus Parser/Validierung in `router/provider_output/`
+- `NormalizedToolCall`, `NormalizedMessage`, `NormalizedGeneration`, `GenerationRequest` in `router/normalization.py` als Kompatibilitaets- und Boundary-Schicht
 - `ToolSpec`, `ToolCall`, `ToolResult`, `ToolContext`, `ToolExecutor` in `router/tools/types.py`
 - `ToolRegistry` in `router/tools/registry.py`
 - `ToolPolicy` in `router/tools/policy.py`
@@ -54,14 +58,13 @@ V1 unterstuetzt bewusst noch nicht:
 - RAG
 - Workflow- oder Background-Engines
 
-## Normalisierte Datenmodelle
+## Interne Datenmodelle
 
-Der Router arbeitet intern nicht direkt mit OpenAI-, Gemini- oder vLLM-Rohformaten.
+`ConversationTurn` ist jetzt das primaere interne Modell im Router-Kern. Provider-Rohantworten werden an der Boundary in Turns geparst, und der Tool-Loop arbeitet providerunabhaengig nur noch auf diesen Turns.
 
-- `NormalizedMessage` bildet System-, User-, Assistant- und Tool-Nachrichten ab.
-- `NormalizedToolCall` bildet einen einzelnen provider-unabhaengigen Tool-Aufruf ab.
-- `NormalizedGeneration` kapselt die normalisierte Modellantwort eines Schritts inklusive optionaler Tool-Calls und Metadaten.
-- `GenerationRequest` beschreibt den provider-unabhaengigen Input fuer den naechsten Modellschritt inklusive normalisierter Nachrichten und der erlaubten Tool-Spezifikationen.
+- `ConversationTurn` bildet die internen Turn-Typen `user`, `assistant`, `tool_call`, `tool_result` und `final` explizit ab.
+- `NormalizedMessage`, `NormalizedToolCall` und `NormalizedGeneration` bleiben als Kompatibilitaets- und API-Schicht bestehen, z. B. fuer Provider-Request-Serialisierung und den stabilen HTTP-Response-Contract.
+- `GenerationRequest` beschreibt den provider-unabhaengigen Input fuer den naechsten Modellschritt inklusive kompatibler Nachrichten und der erlaubten Tool-Spezifikationen.
 - Fuer Tool-Result-Nachrichten ist `content_json` das interne Primaerformat; Provider-Adapter serialisieren strukturierte Inhalte erst an ihrer jeweiligen Grenze in Text.
 
 ## Fehlervertrag

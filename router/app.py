@@ -11,6 +11,7 @@ from socket import timeout as SocketTimeout
 from typing import cast
 from uuid import uuid4
 
+from router.conversation import turns_to_generation
 from router.normalization import GenerationRequest, request_messages_from_payload
 from router.policies import (
     RoutingPolicyError,
@@ -249,7 +250,10 @@ class RouterApplication:
             )
             return exc.status_code, normalize_provider_error(exc)
 
-        response = cast(dict[str, JSONValue], generation_to_chat_completion(result.generation))
+        response = cast(
+            dict[str, JSONValue],
+            generation_to_chat_completion(turns_to_generation(result.turns)),
+        )
         if result.tool_steps:
             response["tool_steps"] = result.tool_steps
         return HTTPStatus.OK, response

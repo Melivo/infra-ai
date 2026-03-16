@@ -14,6 +14,7 @@ from router.normalization import (
     NormalizedToolCall,
 )
 from router.app import RouterApplication, RouterRequestHandler
+from router.provider_output import ProviderOutput
 from router.providers.base import Provider, ProviderError
 from router.schemas import JSONValue, RouterConfig
 from router.tools.types import ToolCall, ToolContext, ToolResult, ToolRiskLevel, ToolSpec
@@ -84,7 +85,7 @@ class StubProvider(Provider):
             },
         )
 
-    def generate(self, request: GenerationRequest) -> NormalizedGeneration:
+    def generate(self, request: GenerationRequest) -> ProviderOutput:
         self.last_request = request
         self.request_history.append(request)
         generation = next(
@@ -100,7 +101,7 @@ class StubProvider(Provider):
                 provider_slot=request.provider_slot,
             ),
         )
-        return generation
+        return _generation_to_provider_output(self.name, generation, request.provider_slot)
 
     def stream_chat_completions(self, payload: dict[str, JSONValue]) -> addinfourl:
         if not self.stream_supported:
@@ -129,7 +130,7 @@ class ErrorProvider(Provider):
     def list_models(self) -> tuple[int, JSONValue]:
         raise self.list_error or ProviderError("unexpected list error")
 
-    def generate(self, request: GenerationRequest) -> NormalizedGeneration:
+    def generate(self, request: GenerationRequest) -> ProviderOutput:
         del request
         raise self.chat_error or ProviderError("unexpected chat error")
 
@@ -187,6 +188,52 @@ class _FakeSocket:
 class _FakeServer:
     def __init__(self, app: RouterApplication) -> None:
         self.app = app
+
+
+def _generation_to_provider_output(
+    provider_name: str,
+    generation: NormalizedGeneration,
+    provider_slot: str | None,
+) -> ProviderOutput:
+    message_content = generation.message.content
+    if message_content is None and generation.message.content_json is not None:
+        message_content = json.dumps(generation.message.content_json, sort_keys=True)
+
+    message_payload: dict[str, JSONValue] = {
+        "role": generation.message.role,
+        "content": message_content or "",
+    }
+    if generation.message.tool_calls:
+        message_payload["tool_calls"] = [
+            {
+                "id": tool_call.call_id,
+                "type": "function",
+                "function": {
+                    "name": tool_call.name,
+                    "arguments": json.dumps(tool_call.arguments, sort_keys=True),
+                },
+            }
+            for tool_call in generation.message.tool_calls
+        ]
+
+    return ProviderOutput(
+        format="openai_chat_completion",
+        body={
+            "id": generation.response_id or f"{provider_name}-chat",
+            "model": generation.model or f"{provider_name}-model",
+            "choices": [
+                {
+                    "message": message_payload,
+                    "finish_reason": generation.finish_reason
+                    or ("tool_calls" if generation.message.tool_calls else "stop"),
+                }
+            ],
+            "usage": generation.usage,
+        },
+        provider_name=generation.provider_name or provider_name,
+        provider_slot=generation.provider_slot or provider_slot,
+        fallback_model=generation.model,
+    )
 
 
 def perform_http_request(

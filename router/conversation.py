@@ -1,3 +1,5 @@
+"""Primary router-internal conversation model and compatibility mappings."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
@@ -99,6 +101,7 @@ def turn_to_tool_call(turn: ConversationTurn) -> NormalizedToolCall:
 
 
 def generation_to_turns(generation: NormalizedGeneration) -> list[ConversationTurn]:
+    """Compatibility mapping from legacy normalized generation into conversation turns."""
     turns = message_to_turns(generation.message)
     if generation.final:
         turns.append(
@@ -114,6 +117,7 @@ def generation_to_turns(generation: NormalizedGeneration) -> list[ConversationTu
 
 
 def turns_to_generation(turns: list[ConversationTurn]) -> NormalizedGeneration:
+    """Compatibility mapping from primary conversation turns to API-facing generation shape."""
     assistant_turn: ConversationTurn | None = None
     tool_call_turns: list[ConversationTurn] = []
     final_turn: ConversationTurn | None = None

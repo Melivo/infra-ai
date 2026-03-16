@@ -1,27 +1,15 @@
+"""Provider-specific parsing into router-internal conversation turns."""
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-import json
-
-from router.conversation import ConversationTurn, TurnType, generation_to_turns, tool_call_to_turn, turns_to_generation
-from router.normalization import NormalizedGeneration, NormalizedToolCall
+from router.conversation import ConversationTurn, TurnType
 from router.schemas import JSONValue
 
-
-@dataclass(frozen=True)
-class ProviderOutput:
-    format: str
-    body: JSONValue | NormalizedGeneration
-    provider_name: str
-    provider_slot: str | None = None
-    fallback_model: str | None = None
-    metadata: dict[str, JSONValue] = field(default_factory=dict)
+from router.provider_output.types import ProviderOutput
+from router.provider_output.validators import invalid_model_tool_call, parse_tool_call_fields
 
 
-def parse_provider_generation(provider_response: ProviderOutput | NormalizedGeneration) -> list[ConversationTurn]:
-    if isinstance(provider_response, NormalizedGeneration):
-        return generation_to_turns(provider_response)
-
+def parse_provider_generation(provider_response: ProviderOutput) -> list[ConversationTurn]:
     if provider_response.format == "openai_chat_completion":
         return _parse_openai_chat_completion(provider_response)
     if provider_response.format == "openai_responses":
@@ -29,12 +17,6 @@ def parse_provider_generation(provider_response: ProviderOutput | NormalizedGene
     if provider_response.format == "gemini_generate_content":
         return _parse_gemini_generate_content(provider_response)
     raise ValueError(f"Unsupported provider output format: {provider_response.format!r}")
-
-
-def provider_output_to_generation(provider_response: ProviderOutput | NormalizedGeneration) -> NormalizedGeneration:
-    if isinstance(provider_response, NormalizedGeneration):
-        return provider_response
-    return turns_to_generation(parse_provider_generation(provider_response))
 
 
 def _parse_openai_chat_completion(provider_response: ProviderOutput) -> list[ConversationTurn]:
@@ -63,11 +45,11 @@ def _parse_openai_chat_completion(provider_response: ProviderOutput) -> list[Con
 
     first_choice = choices[0]
     if not isinstance(first_choice, dict):
-        raise _invalid_tool_call_error("OpenAI-compatible provider returned an invalid choice payload.")
+        raise invalid_model_tool_call("OpenAI-compatible provider returned an invalid choice payload.")
 
     message_payload = first_choice.get("message")
     if not isinstance(message_payload, dict):
-        raise _invalid_tool_call_error("OpenAI-compatible provider returned a choice without a message.")
+        raise invalid_model_tool_call("OpenAI-compatible provider returned a choice without a message.")
 
     tool_call_turns = _extract_openai_tool_call_turns(message_payload.get("tool_calls"))
     content = _extract_openai_message_content(message_payload.get("content"))
@@ -228,29 +210,28 @@ def _extract_openai_tool_call_turns(tool_calls_payload: JSONValue) -> list[Conve
     if tool_calls_payload is None:
         return []
     if not isinstance(tool_calls_payload, list):
-        raise _invalid_tool_call_error("OpenAI-compatible provider returned a non-list tool_calls payload.")
+        raise invalid_model_tool_call("OpenAI-compatible provider returned a non-list tool_calls payload.")
 
     turns: list[ConversationTurn] = []
     for item in tool_calls_payload:
         if not isinstance(item, dict):
-            raise _invalid_tool_call_error("OpenAI-compatible provider returned an invalid tool_calls entry.")
-        call_id = item.get("id")
+            raise invalid_model_tool_call("OpenAI-compatible provider returned an invalid tool_calls entry.")
         function_payload = item.get("function")
-        if not isinstance(call_id, str) or not isinstance(function_payload, dict):
-            raise _invalid_tool_call_error("OpenAI-compatible provider returned a malformed tool call envelope.")
-        if not call_id.strip():
-            raise _invalid_tool_call_error("OpenAI-compatible provider returned a tool call without a valid id.")
-        name = function_payload.get("name")
-        arguments_raw = function_payload.get("arguments")
-        if not isinstance(name, str) or not name.strip():
-            raise _invalid_tool_call_error("OpenAI-compatible provider returned a tool call without a name.")
+        if not isinstance(function_payload, dict):
+            raise invalid_model_tool_call("OpenAI-compatible provider returned a malformed tool call envelope.")
+        call_id, name, arguments = parse_tool_call_fields(
+            call_id=item.get("id"),
+            name=function_payload.get("name"),
+            arguments_raw=function_payload.get("arguments"),
+            malformed_message="OpenAI-compatible provider returned a malformed tool call envelope.",
+            missing_name_message="OpenAI-compatible provider returned a tool call without a name.",
+        )
         turns.append(
-            tool_call_to_turn(
-                NormalizedToolCall(
-                    call_id=call_id,
-                    name=name,
-                    arguments=_parse_tool_arguments(arguments_raw),
-                )
+            ConversationTurn(
+                type=TurnType.TOOL_CALL,
+                tool_call_id=call_id,
+                tool_name=name,
+                tool_arguments=arguments,
             )
         )
     return turns
@@ -266,20 +247,18 @@ def _extract_openai_responses_tool_call_turns(output: JSONValue) -> list[Convers
             continue
         if item.get("type") != "function_call":
             continue
-
-        call_id = item.get("call_id")
-        name = item.get("name")
-        arguments = item.get("arguments")
-        if not isinstance(call_id, str) or not call_id.strip():
-            raise _invalid_tool_call_error("OpenAI Responses returned a malformed function call.")
-        if not isinstance(name, str) or not name.strip():
-            raise _invalid_tool_call_error("OpenAI Responses returned a malformed function call.")
+        call_id, name, arguments = parse_tool_call_fields(
+            call_id=item.get("call_id"),
+            name=item.get("name"),
+            arguments_raw=item.get("arguments"),
+            malformed_message="OpenAI Responses returned a malformed function call.",
+        )
         tool_call_turns.append(
             ConversationTurn(
                 type=TurnType.TOOL_CALL,
                 tool_call_id=call_id,
                 tool_name=name,
-                tool_arguments=_parse_tool_arguments(arguments),
+                tool_arguments=arguments,
             )
         )
     return tool_call_turns
@@ -293,7 +272,6 @@ def _extract_openai_responses_output_text(output: JSONValue) -> str:
     for item in output:
         if not isinstance(item, dict):
             continue
-
         if item.get("type") == "message":
             content = item.get("content")
             if not isinstance(content, list):
@@ -302,24 +280,9 @@ def _extract_openai_responses_output_text(output: JSONValue) -> str:
                 if isinstance(part, dict) and isinstance(part.get("text"), str):
                     text_parts.append(part["text"])
             continue
-
         if item.get("type") == "output_text" and isinstance(item.get("text"), str):
             text_parts.append(item["text"])
-
     return "".join(text_parts)
-
-
-def _parse_tool_arguments(arguments_raw: JSONValue) -> dict[str, JSONValue]:
-    if isinstance(arguments_raw, dict):
-        return arguments_raw
-    if isinstance(arguments_raw, str):
-        try:
-            arguments = json.loads(arguments_raw)
-        except json.JSONDecodeError as exc:
-            raise _invalid_tool_call_error("Model returned tool arguments that are not valid JSON.") from exc
-        if isinstance(arguments, dict):
-            return arguments
-    raise _invalid_tool_call_error("Model returned tool arguments that are not a JSON object.")
 
 
 def _finish_reason(status: JSONValue, *, has_tool_calls: bool) -> str:
@@ -357,18 +320,3 @@ def _generation_metadata(
 
 def _string_value(value: JSONValue) -> str | None:
     return value if isinstance(value, str) else None
-
-
-def _invalid_tool_call_error(message: str) -> ProviderError:
-    from router.providers.base import ProviderError
-
-    return ProviderError(
-        message,
-        status_code=502,
-        payload={
-            "error": {
-                "type": "invalid_model_tool_call",
-                "message": message,
-            }
-        },
-    )

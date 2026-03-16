@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from router.provider_output import ProviderOutput, parse_provider_generation, provider_output_to_generation
+from router.conversation import turns_to_generation
+from router.provider_output import ProviderOutput, parse_provider_generation
 from router.providers.base import ProviderError
 
 
@@ -125,25 +126,27 @@ class ProviderOutputParserTests(unittest.TestCase):
         self.assertEqual(turns[1].tool_name, "echo")
         self.assertEqual(turns[1].tool_arguments, {"message": "hi"})
 
-    def test_provider_output_to_generation_rebuilds_public_response_shape(self) -> None:
-        generation = provider_output_to_generation(
-            ProviderOutput(
-                format="openai_responses",
-                body={
-                    "id": "resp-2",
-                    "model": "gpt-5.2",
-                    "status": "completed",
-                    "output_text": "done",
-                    "output": [],
-                    "usage": {
-                        "input_tokens": 10,
-                        "output_tokens": 4,
-                        "total_tokens": 14,
+    def test_parser_turns_rebuild_public_response_shape_via_compat_boundary(self) -> None:
+        generation = turns_to_generation(
+            parse_provider_generation(
+                ProviderOutput(
+                    format="openai_responses",
+                    body={
+                        "id": "resp-2",
+                        "model": "gpt-5.2",
+                        "status": "completed",
+                        "output_text": "done",
+                        "output": [],
+                        "usage": {
+                            "input_tokens": 10,
+                            "output_tokens": 4,
+                            "total_tokens": 14,
+                        },
                     },
-                },
-                provider_name="openai_responses",
-                provider_slot="openai_reasoning",
-                fallback_model="gpt-5.2",
+                    provider_name="openai_responses",
+                    provider_slot="openai_reasoning",
+                    fallback_model="gpt-5.2",
+                )
             )
         )
 
@@ -153,6 +156,39 @@ class ProviderOutputParserTests(unittest.TestCase):
         self.assertEqual(generation.provider_name, "openai_responses")
         self.assertEqual(generation.provider_slot, "openai_reasoning")
         self.assertEqual(generation.usage["total_tokens"], 14)
+
+    def test_parse_gemini_fallback_returns_assistant_and_final_turns(self) -> None:
+        turns = parse_provider_generation(
+            ProviderOutput(
+                format="gemini_generate_content",
+                body={
+                    "candidates": [
+                        {
+                            "finishReason": "STOP",
+                            "content": {
+                                "parts": [
+                                    {"text": "gemini"},
+                                    {"text": " result"},
+                                ]
+                            },
+                        }
+                    ],
+                    "usageMetadata": {
+                        "promptTokenCount": 5,
+                        "candidatesTokenCount": 3,
+                        "totalTokenCount": 8,
+                    },
+                },
+                provider_name="gemini_fallback",
+                fallback_model="gemini-2.5-pro",
+            )
+        )
+
+        self.assertEqual([turn.type.value for turn in turns], ["assistant", "final"])
+        self.assertEqual(turns[0].content, "gemini result")
+        self.assertEqual(turns[1].metadata["provider_name"], "gemini_fallback")
+        self.assertEqual(turns[1].metadata["finish_reason"], "stop")
+        self.assertEqual(turns[1].metadata["usage"]["total_tokens"], 8)
 
 
 if __name__ == "__main__":

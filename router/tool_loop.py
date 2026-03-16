@@ -13,12 +13,8 @@ from router.conversation import (
     turn_to_tool_call,
     turns_to_messages,
 )
-from router.normalization import (
-    GenerationRequest,
-    NormalizedGeneration,
-    NormalizedToolCall,
-)
-from router.provider_output import parse_provider_generation, provider_output_to_generation
+from router.normalization import GenerationRequest, NormalizedToolCall
+from router.provider_output import parse_provider_generation
 from router.providers.base import Provider
 from router.schemas import JSONValue
 from router.tools.orchestrator import ToolExecutionTimeoutError, ToolOrchestrator
@@ -42,7 +38,7 @@ class ToolLoopError(RuntimeError):
 
 @dataclass(frozen=True)
 class ToolLoopResult:
-    generation: NormalizedGeneration
+    turns: list[ConversationTurn]
     tool_steps: int
 
 
@@ -82,7 +78,7 @@ class ToolLoopEngine:
             tool_call_turns = _tool_call_turns(generation_turns)
             if not tool_call_turns:
                 return ToolLoopResult(
-                    generation=provider_output_to_generation(provider_output),
+                    turns=list(turns),
                     tool_steps=tool_steps,
                 )
 

@@ -7,8 +7,9 @@ from socket import timeout as SocketTimeout
 from urllib.response import addinfourl
 from urllib import error, request
 
+from router.conversation import turns_to_generation
 from router.normalization import GenerationRequest, NormalizedGeneration
-from router.provider_output import ProviderOutput, provider_output_to_generation
+from router.provider_output import ProviderOutput, parse_provider_generation
 from router.schemas import JSONValue
 
 AUTO_MODEL_ALIASES = {"", "auto", "default", "router-default"}
@@ -52,7 +53,7 @@ class Provider(ABC):
         raise NotImplementedError
 
     def chat_completions(self, request: GenerationRequest) -> tuple[int, JSONValue]:
-        generation = provider_output_to_generation(self.generate(request))
+        generation = turns_to_generation(parse_provider_generation(self.generate(request)))
         return 200, generation_to_chat_completion(generation)
 
     def stream_chat_completions(self, payload: dict[str, JSONValue]) -> addinfourl:
