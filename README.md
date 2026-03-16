@@ -84,6 +84,7 @@ Alle Befehle unten werden vom Repository-Root ausgefuehrt.
 1. `cp vllm/.env.example vllm/.env`
 2. Optional: Lege lokale Konfigurationsdateien aus den Beispielen an, zum Beispiel `config/router.local.env` und `config/providers.local.env`.
 3. Trage nur in lokalen, nicht versionierten Dateien echte API-Keys ein.
+4. Falls die GPU bereits leicht belegt ist, senke `VLLM_GPU_MEMORY_UTILIZATION` in `vllm/.env` etwas unter den Default, zum Beispiel auf `0.85`.
 
 Wenn du Cloud-Provider aktivierst, validiert der Router die notwendige Konfiguration beim Start fail-fast und beendet sich mit einer klaren Fehlermeldung, statt erst beim ersten Request halb-konfiguriert zu scheitern.
 
