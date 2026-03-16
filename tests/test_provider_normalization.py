@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import unittest
 
+from router.normalization import NormalizedMessage
 from router.providers.base import ProviderError
-from router.providers.local_vllm import _normalize_openai_chat_response
-from router.providers.openai.responses import _normalize_response
+from router.providers.gemini_fallback import _message_text
+from router.providers.local_vllm import _message_content_text, _normalize_openai_chat_response
+from router.providers.openai.responses import _message_output_value, _normalize_response
 
 
 class ProviderNormalizationTests(unittest.TestCase):
@@ -72,6 +74,18 @@ class ProviderNormalizationTests(unittest.TestCase):
             "invalid_model_tool_call",
         )
 
+    def test_local_vllm_serializes_content_json_when_text_is_missing(self) -> None:
+        self.assertEqual(
+            _message_content_text(
+                NormalizedMessage(
+                    role="tool",
+                    content=None,
+                    content_json={"message": "hi"},
+                )
+            ),
+            "{\"message\": \"hi\"}",
+        )
+
     def test_openai_responses_normalizes_function_call_output(self) -> None:
         generation = _normalize_response(
             {
@@ -115,6 +129,30 @@ class ProviderNormalizationTests(unittest.TestCase):
         self.assertEqual(
             exc_info.exception.payload["error"]["type"],
             "invalid_model_tool_call",
+        )
+
+    def test_openai_responses_serializes_content_json_when_text_is_missing(self) -> None:
+        self.assertEqual(
+            _message_output_value(
+                NormalizedMessage(
+                    role="tool",
+                    content=None,
+                    content_json={"sum": 5},
+                )
+            ),
+            "{\"sum\": 5}",
+        )
+
+    def test_gemini_fallback_serializes_content_json_when_text_is_missing(self) -> None:
+        self.assertEqual(
+            _message_text(
+                NormalizedMessage(
+                    role="tool",
+                    content=None,
+                    content_json={"sum": 5},
+                )
+            ),
+            "{\"sum\": 5}",
         )
 
 

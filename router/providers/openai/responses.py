@@ -127,11 +127,12 @@ def _build_responses_input(messages: list[NormalizedMessage]) -> list[JSONValue]
             continue
 
         if message.tool_calls:
-            if message.content:
+            assistant_text = _message_output_value(message)
+            if assistant_text:
                 responses_input.append(
                     {
                         "role": "assistant",
-                        "content": [{"type": "output_text", "text": message.content}],
+                        "content": [{"type": "output_text", "text": assistant_text}],
                     }
                 )
             for tool_call in message.tool_calls:

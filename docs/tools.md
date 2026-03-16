@@ -62,6 +62,7 @@ Der Router arbeitet intern nicht direkt mit OpenAI-, Gemini- oder vLLM-Rohformat
 - `NormalizedToolCall` bildet einen einzelnen provider-unabhaengigen Tool-Aufruf ab.
 - `NormalizedGeneration` kapselt die normalisierte Modellantwort eines Schritts inklusive optionaler Tool-Calls und Metadaten.
 - `GenerationRequest` beschreibt den provider-unabhaengigen Input fuer den naechsten Modellschritt inklusive normalisierter Nachrichten und der erlaubten Tool-Spezifikationen.
+- Fuer Tool-Result-Nachrichten ist `content_json` das interne Primaerformat; Provider-Adapter serialisieren strukturierte Inhalte erst an ihrer jeweiligen Grenze in Text.
 
 ## Fehlervertrag
 

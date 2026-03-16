@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -107,7 +106,7 @@ def request_messages_from_payload(payload: dict[str, JSONValue]) -> list[Normali
 def tool_result_to_message(result: ToolResult) -> NormalizedMessage:
     if result.output_json is not None:
         content_json: JSONValue | None = result.output_json
-        content = json.dumps(result.output_json, sort_keys=True)
+        content = result.output_text
     else:
         content_json = None
         if result.output_text is not None:

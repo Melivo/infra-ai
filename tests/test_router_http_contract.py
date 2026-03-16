@@ -555,7 +555,6 @@ class RouterHTTPContractTests(unittest.TestCase):
         self.assertEqual(second_request.messages[-2].tool_calls[0].name, "echo")
         self.assertEqual(second_request.messages[-1].role, "tool")
         self.assertEqual(second_request.messages[-1].content_json, {"message": "hello"})
-        self.assertEqual(second_request.messages[-1].content, "{\"message\": \"hello\"}")
 
     def test_unknown_model_tool_call_returns_not_found(self) -> None:
         app, providers = self.make_app(build_config())
