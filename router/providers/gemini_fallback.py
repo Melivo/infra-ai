@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from router.normalization import GenerationRequest, NormalizedGeneration, NormalizedMessage
 from router.providers.base import Provider, ProviderError, request_json
 from router.schemas import JSONValue
@@ -68,7 +70,7 @@ def _build_gemini_payload(request: GenerationRequest) -> dict[str, JSONValue]:
     system_texts: list[str] = []
 
     for message in request.messages:
-        text = message.content or ""
+        text = _message_text(message)
         if message.role == "system":
             system_texts.append(text)
             continue
@@ -130,6 +132,12 @@ def _build_gemini_payload(request: GenerationRequest) -> dict[str, JSONValue]:
         gemini_payload["generationConfig"] = generation_config
 
     return gemini_payload
+
+
+def _message_text(message: NormalizedMessage) -> str:
+    if message.content_json is not None:
+        return json.dumps(message.content_json, sort_keys=True)
+    return message.content or ""
 
 
 def _translate_models(body: JSONValue) -> JSONValue:

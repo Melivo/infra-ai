@@ -228,10 +228,11 @@ Aktuell ist die Router-Integration bewusst klein, aber nicht mehr rein manuell:
 - `POST /v1/chat/completions` akzeptiert optional ein Feld `allowed_tools`
 - der Router normalisiert Modellantworten intern provider-unabhaengig, erkennt einzelne Tool-Calls und fuehrt sie kontrolliert aus
 - pro Modellschritt ist in V1 genau ein Tool-Call erlaubt
-- Tool-Ergebnisse werden als interne Tool-Nachrichten wieder in den Modellkontext eingespeist
+- triviale Wiederholungen identischer Tool-Calls werden frueh abgebrochen
+- Tool-Ergebnisse werden als interne Tool-Nachrichten mit stabilem JSON-Pfad wieder in den Modellkontext eingespeist
 - der Loop bricht spaetestens nach `INFRA_AI_MAX_TOOL_STEPS` ab
 - der explizite Debug-Pfad ueber `tool_call` bleibt erhalten
-- derzeit ist nur das Beispieltool `echo` registriert
+- derzeit sind die Beispieltools `echo` und `add_numbers` registriert
 - `GET /v1/router/capabilities` liefert kleine Tool-Metadaten fuer spaetere Frontend-Auswahl
 - eine spaetere klickbare oder waehlbare Tool-UI gehoert ins CLI/TUI-Frontend, nicht in den Router
 

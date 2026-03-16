@@ -1,9 +1,16 @@
 from __future__ import annotations
+
 import os
 from dataclasses import dataclass, replace
 from http import HTTPStatus
+import json
 
-from router.normalization import GenerationRequest, NormalizedGeneration, tool_result_to_message
+from router.normalization import (
+    GenerationRequest,
+    NormalizedGeneration,
+    NormalizedToolCall,
+    tool_result_to_message,
+)
 from router.providers.base import Provider
 from router.schemas import JSONValue
 from router.tools.orchestrator import ToolExecutionTimeoutError, ToolOrchestrator
@@ -32,6 +39,8 @@ class ToolLoopResult:
 
 
 class ToolLoopEngine:
+    _REPEATED_CALL_WINDOW = 2
+
     def __init__(
         self,
         *,
@@ -55,6 +64,7 @@ class ToolLoopEngine:
     ) -> ToolLoopResult:
         current_request = request
         tool_steps = 0
+        recent_call_signatures: list[str] = []
 
         while True:
             generation = provider.generate(current_request)
@@ -77,6 +87,15 @@ class ToolLoopEngine:
                 )
 
             tool_call = tool_calls[0]
+            self._validate_model_tool_call(tool_call)
+            tool_call_signature = _tool_call_signature(tool_call.name, tool_call.arguments)
+            if tool_call_signature in recent_call_signatures:
+                raise ToolLoopError(
+                    HTTPStatus.CONFLICT,
+                    "tool_loop_repeated_call_detected",
+                    f"Model repeated the same tool call for {tool_call.name} without making progress.",
+                )
+
             result = await self._run_tool_call(
                 tool_call=ToolCall(
                     call_id=tool_call.call_id,
@@ -88,6 +107,10 @@ class ToolLoopEngine:
                 allowed_tools=allowed_tools,
             )
             tool_steps += 1
+            recent_call_signatures = [
+                *recent_call_signatures[-(self._REPEATED_CALL_WINDOW - 1) :],
+                tool_call_signature,
+            ]
             current_request = replace(
                 current_request,
                 messages=[
@@ -111,6 +134,33 @@ class ToolLoopEngine:
             current_tool_step=current_tool_step,
             allowed_tools=allowed_tools,
         )
+
+    def _validate_model_tool_call(self, tool_call: NormalizedToolCall) -> None:
+        if not isinstance(tool_call.call_id, str) or not tool_call.call_id.strip():
+            raise ToolLoopError(
+                HTTPStatus.BAD_GATEWAY,
+                "invalid_model_tool_call",
+                "Model returned a tool call without a valid id.",
+            )
+        if not isinstance(tool_call.name, str) or not tool_call.name.strip():
+            raise ToolLoopError(
+                HTTPStatus.BAD_GATEWAY,
+                "invalid_model_tool_call",
+                "Model returned a tool call without a valid name.",
+            )
+        if not isinstance(tool_call.arguments, dict):
+            raise ToolLoopError(
+                HTTPStatus.BAD_GATEWAY,
+                "invalid_model_tool_call",
+                "Model returned tool arguments that are not a JSON object.",
+            )
+        for key in tool_call.arguments:
+            if not isinstance(key, str) or not key.strip():
+                raise ToolLoopError(
+                    HTTPStatus.BAD_GATEWAY,
+                    "invalid_model_tool_call",
+                    "Model returned tool arguments with an invalid field name.",
+                )
 
     async def _run_tool_call(
         self,
@@ -179,3 +229,7 @@ class ToolLoopEngine:
             )
 
         return result
+
+
+def _tool_call_signature(name: str, arguments: dict[str, JSONValue]) -> str:
+    return f"{name}:{json.dumps(arguments, sort_keys=True, separators=(',', ':'))}"

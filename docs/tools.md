@@ -40,7 +40,8 @@ V1 unterstuetzt:
 - automatische Erkennung genau eines Tool-Calls pro Modellschritt
 - Allowlist-Nutzung ueber `allowed_tools`
 - Policy- und Schema-Validierung vor der Tool-Ausfuehrung
-- Rueckgabe des Tool-Results in den Modellkontext als interne Tool-Nachricht
+- kleine Wiederholungserkennung fuer identische Tool-Calls ohne Fortschritt
+- Rueckgabe des Tool-Results in den Modellkontext als interne Tool-Nachricht mit stabilem JSON-Pfad
 - Abbruch nach `INFRA_AI_MAX_TOOL_STEPS`
 - Tool-Timeout ueber `INFRA_AI_TOOL_TIMEOUT_S`
 
@@ -84,12 +85,18 @@ V1 behandelt dabei mindestens:
 - `tool_timeout`
 - `max_tool_steps_exceeded`
 - `invalid_model_tool_call`
+- `tool_loop_repeated_call_detected`
 
 ## Aktuelles Beispieltool
 
-Der Router registriert aktuell nur das Beispieltool `echo`.
+Der Router registriert aktuell zwei kleine Beispieltools:
 
-`echo` gibt die uebergebenen Argumente unveraendert als `ToolResult` zurueck. Es dient als Infrastrukturtest fuer Registry, Policy, Orchestrator und den automatischen Loop.
+- `echo`
+- `add_numbers`
+
+`echo` gibt die uebergebenen Argumente unveraendert als `ToolResult` zurueck.
+
+`add_numbers` addiert zwei numerische Felder `a` und `b` mit einem strengen Input-Vertrag. Das Tool dient als deterministisches Beispiel fuer Tool-Loop, Validierung und Fehlerfaelle.
 
 ## Ausblick
 

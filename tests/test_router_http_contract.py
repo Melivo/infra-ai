@@ -151,17 +151,6 @@ class FailingExecutor:
         )
 
 
-class EchoExecutor:
-    async def execute(self, call: ToolCall, ctx: ToolContext) -> ToolResult:
-        del ctx
-        return ToolResult(
-            call_id=call.call_id,
-            name=call.name,
-            ok=True,
-            output_json=call.arguments,
-        )
-
-
 class SlowExecutor:
     async def execute(self, call: ToolCall, ctx: ToolContext) -> ToolResult:
         del call
@@ -356,6 +345,13 @@ class RouterHTTPContractTests(unittest.TestCase):
             payload["tools"],
             [
                 {
+                    "name": "add_numbers",
+                    "description": "Add two numeric arguments and return their sum.",
+                    "risk_level": "low",
+                    "capabilities": ["math", "utility"],
+                    "enabled_by_default": True,
+                },
+                {
                     "name": "echo",
                     "description": "Return the provided arguments unchanged.",
                     "risk_level": "low",
@@ -475,6 +471,28 @@ class RouterHTTPContractTests(unittest.TestCase):
         self.assertEqual(providers["gemini_fallback"].last_request, None)
         self.assertEqual(providers["openai_responses"].last_request, None)
 
+    def test_explicit_tool_call_supports_strict_example_tool(self) -> None:
+        app, providers = self.make_app(build_config())
+
+        status_code, response_headers, payload = perform_json_request(
+            app,
+            method="POST",
+            path="/v1/chat/completions",
+            body=build_payload(
+                allowed_tools=["add_numbers"],
+                tool_call={
+                    "name": "add_numbers",
+                    "arguments": {"a": 2, "b": 3},
+                },
+            ),
+        )
+
+        self.assertEqual(status_code, 200)
+        self.assertEqual(response_headers["content-type"], "application/json")
+        self.assertEqual(payload["tool_result"]["name"], "add_numbers")
+        self.assertEqual(payload["tool_result"]["output_json"]["sum"], 5)
+        self.assertEqual(providers["local_vllm"].last_request, None)
+
     def test_chat_without_tool_call_keeps_existing_provider_path(self) -> None:
         app, providers = self.make_app(build_config())
 
@@ -536,6 +554,7 @@ class RouterHTTPContractTests(unittest.TestCase):
         self.assertEqual(second_request.messages[-2].role, "assistant")
         self.assertEqual(second_request.messages[-2].tool_calls[0].name, "echo")
         self.assertEqual(second_request.messages[-1].role, "tool")
+        self.assertEqual(second_request.messages[-1].content_json, {"message": "hello"})
         self.assertEqual(second_request.messages[-1].content, "{\"message\": \"hello\"}")
 
     def test_unknown_model_tool_call_returns_not_found(self) -> None:
@@ -569,6 +588,38 @@ class RouterHTTPContractTests(unittest.TestCase):
 
         self.assertEqual(status_code, 404)
         self.assert_error_payload(payload, error_type="tool_not_found")
+
+    def test_invalid_model_tool_call_returns_bad_gateway(self) -> None:
+        app, providers = self.make_app(build_config())
+        providers["local_vllm"] = StubProvider(
+            "local_vllm",
+            generations=[
+                NormalizedGeneration(
+                    message=NormalizedMessage(
+                        role="assistant",
+                        tool_calls=[
+                            NormalizedToolCall(
+                                call_id="call-invalid",
+                                name=" ",
+                                arguments={},
+                            )
+                        ],
+                    ),
+                    final=False,
+                    provider_name="local_vllm",
+                )
+            ],
+        )
+
+        status_code, _, payload = perform_json_request(
+            app,
+            method="POST",
+            path="/v1/chat/completions",
+            body=build_payload(),
+        )
+
+        self.assertEqual(status_code, 502)
+        self.assert_error_payload(payload, error_type="invalid_model_tool_call")
 
     def test_disallowed_model_tool_call_returns_forbidden(self) -> None:
         app, providers = self.make_app(build_config())
@@ -642,22 +693,6 @@ class RouterHTTPContractTests(unittest.TestCase):
 
     def test_invalid_tool_arguments_return_consistent_error(self) -> None:
         app, providers = self.make_app(build_config())
-        app.tool_registry.register(
-            ToolSpec(
-                name="strict_echo",
-                description="Require a message string.",
-                input_schema={
-                    "type": "object",
-                    "properties": {"message": {"type": "string"}},
-                    "required": ["message"],
-                    "additionalProperties": False,
-                },
-                risk_level=ToolRiskLevel.LOW,
-                capabilities=["debug"],
-                enabled_by_default=True,
-            ),
-            EchoExecutor(),
-        )
         providers["local_vllm"] = StubProvider(
             "local_vllm",
             generations=[
@@ -666,9 +701,9 @@ class RouterHTTPContractTests(unittest.TestCase):
                         role="assistant",
                         tool_calls=[
                             NormalizedToolCall(
-                                call_id="call-strict",
-                                name="strict_echo",
-                                arguments={},
+                                call_id="call-add",
+                                name="add_numbers",
+                                arguments={"a": 1},
                             )
                         ],
                     ),
@@ -687,6 +722,52 @@ class RouterHTTPContractTests(unittest.TestCase):
 
         self.assertEqual(status_code, 400)
         self.assert_error_payload(payload, error_type="invalid_tool_arguments")
+
+    def test_repeated_identical_tool_call_is_stopped(self) -> None:
+        app, providers = self.make_app(build_config())
+        providers["local_vllm"] = StubProvider(
+            "local_vllm",
+            generations=[
+                NormalizedGeneration(
+                    message=NormalizedMessage(
+                        role="assistant",
+                        tool_calls=[
+                            NormalizedToolCall(
+                                call_id="call-repeat-1",
+                                name="echo",
+                                arguments={"message": "repeat"},
+                            )
+                        ],
+                    ),
+                    final=False,
+                    provider_name="local_vllm",
+                ),
+                NormalizedGeneration(
+                    message=NormalizedMessage(
+                        role="assistant",
+                        tool_calls=[
+                            NormalizedToolCall(
+                                call_id="call-repeat-2",
+                                name="echo",
+                                arguments={"message": "repeat"},
+                            )
+                        ],
+                    ),
+                    final=False,
+                    provider_name="local_vllm",
+                ),
+            ],
+        )
+
+        status_code, _, payload = perform_json_request(
+            app,
+            method="POST",
+            path="/v1/chat/completions",
+            body=build_payload(allowed_tools=["echo"]),
+        )
+
+        self.assertEqual(status_code, 409)
+        self.assert_error_payload(payload, error_type="tool_loop_repeated_call_detected")
 
     def test_tool_execution_failure_returns_consistent_error(self) -> None:
         app, providers = self.make_app(build_config())

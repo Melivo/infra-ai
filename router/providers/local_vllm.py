@@ -120,12 +120,12 @@ def _normalized_message_to_openai(message: NormalizedMessage) -> JSONValue:
         return {
             "role": "tool",
             "tool_call_id": message.tool_call_id or "",
-            "content": message.content or "",
+            "content": _message_content_text(message),
         }
 
     payload: dict[str, JSONValue] = {
         "role": message.role,
-        "content": message.content or "",
+        "content": _message_content_text(message),
     }
     if message.tool_calls:
         payload["tool_calls"] = [
@@ -140,6 +140,12 @@ def _normalized_message_to_openai(message: NormalizedMessage) -> JSONValue:
             for tool_call in message.tool_calls
         ]
     return payload
+
+
+def _message_content_text(message: NormalizedMessage) -> str:
+    if message.content_json is not None:
+        return json.dumps(message.content_json, sort_keys=True)
+    return message.content or ""
 
 
 def _tool_spec_to_openai_tool(tool: ToolSpec) -> JSONValue:
@@ -242,9 +248,11 @@ def _extract_openai_tool_calls(tool_calls_payload: JSONValue) -> list[Normalized
         function_payload = item.get("function")
         if not isinstance(call_id, str) or not isinstance(function_payload, dict):
             raise _invalid_tool_call_error("OpenAI-compatible provider returned a malformed tool call envelope.")
+        if not call_id.strip():
+            raise _invalid_tool_call_error("OpenAI-compatible provider returned a tool call without a valid id.")
         name = function_payload.get("name")
         arguments_raw = function_payload.get("arguments")
-        if not isinstance(name, str):
+        if not isinstance(name, str) or not name.strip():
             raise _invalid_tool_call_error("OpenAI-compatible provider returned a tool call without a name.")
         arguments = _parse_tool_arguments(arguments_raw)
         normalized_calls.append(

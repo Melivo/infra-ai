@@ -121,7 +121,7 @@ def _build_responses_input(messages: list[NormalizedMessage]) -> list[JSONValue]
                 {
                     "type": "function_call_output",
                     "call_id": message.tool_call_id or "",
-                    "output": message.content or "",
+                    "output": _message_output_value(message),
                 }
             )
             continue
@@ -148,10 +148,16 @@ def _build_responses_input(messages: list[NormalizedMessage]) -> list[JSONValue]
         responses_input.append(
             {
                 "role": message.role,
-                "content": [{"type": "input_text", "text": message.content or ""}],
+                "content": [{"type": "input_text", "text": _message_output_value(message)}],
             }
         )
     return responses_input
+
+
+def _message_output_value(message: NormalizedMessage) -> str:
+    if message.content_json is not None:
+        return json.dumps(message.content_json, sort_keys=True)
+    return message.content or ""
 
 
 def _tool_spec_to_responses_tool(tool: ToolSpec) -> JSONValue:
@@ -216,7 +222,9 @@ def _extract_tool_calls(output: JSONValue) -> list[NormalizedToolCall]:
         call_id = item.get("call_id")
         name = item.get("name")
         arguments = item.get("arguments")
-        if not isinstance(call_id, str) or not isinstance(name, str):
+        if not isinstance(call_id, str) or not call_id.strip():
+            raise _invalid_tool_call_error("OpenAI Responses returned a malformed function call.")
+        if not isinstance(name, str) or not name.strip():
             raise _invalid_tool_call_error("OpenAI Responses returned a malformed function call.")
         tool_calls.append(
             NormalizedToolCall(

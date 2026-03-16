@@ -22,6 +22,7 @@ class NormalizedToolCall:
 class NormalizedMessage:
     role: NormalizedRole
     content: str | None = None
+    content_json: JSONValue | None = None
     tool_calls: list[NormalizedToolCall] = field(default_factory=list)
     tool_call_id: str | None = None
     tool_name: str | None = None
@@ -105,13 +106,16 @@ def request_messages_from_payload(payload: dict[str, JSONValue]) -> list[Normali
 
 def tool_result_to_message(result: ToolResult) -> NormalizedMessage:
     if result.output_json is not None:
-        content = json.dumps(result.output_json)
-    elif result.output_text is not None:
-        content = result.output_text
-    elif result.error_message is not None:
-        content = result.error_message
+        content_json: JSONValue | None = result.output_json
+        content = json.dumps(result.output_json, sort_keys=True)
     else:
-        content = ""
+        content_json = None
+        if result.output_text is not None:
+            content = result.output_text
+        elif result.error_message is not None:
+            content = result.error_message
+        else:
+            content = ""
 
     metadata: dict[str, JSONValue] = {
         "ok": result.ok,
@@ -123,6 +127,7 @@ def tool_result_to_message(result: ToolResult) -> NormalizedMessage:
     return NormalizedMessage(
         role="tool",
         content=content,
+        content_json=content_json,
         tool_call_id=result.call_id,
         tool_name=result.name,
         metadata=metadata,
