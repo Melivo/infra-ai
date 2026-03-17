@@ -7,6 +7,7 @@ Before doing anything else:
 1. Read and follow:
    - `docs/architecture.md`
    - `docs/architecture-rules.md`
+   - `AGENTS.md` if present
 2. Treat `docs/architecture-rules.md` as non-negotiable.
 3. If present and relevant, also use:
    - `docs/prompts/plan_feature.md`
@@ -18,6 +19,7 @@ Before doing anything else:
 - The router is the stable platform boundary.
 - Frontends stay thin and must not contain provider logic.
 - Providers stay behind the router and must not define the public contract.
+- `AGENTS.md` defines repo working conventions, but architecture rules win on conflict.
 
 ## Core Invariants
 
