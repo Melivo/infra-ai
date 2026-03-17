@@ -460,6 +460,7 @@ Privat bleiben muessen:
 
 - `vllm/.env` ist lokal und darf nicht committed werden.
 - Das Single-4090-Setup nutzt `Qwen/Qwen3-14B-AWQ` mit `awq_marlin`.
-- Die Speichereinstellungen sind bewusst auf stabile Starts mit einer einzelnen RTX 4090 ausgelegt.
+- `vllm` ist aktuell mit `--max-model-len 40960` konfiguriert. Das entspricht dem vom Modell abgeleiteten Kontextlimit und vermeidet die vLLM-Warnung, die bei noch hoeheren Werten fuer sehr lange Kontexte auf NaNs oder Out-of-bounds-Effekte hinweist.
+- Die Speichereinstellungen sind ansonsten bewusst auf stabile Starts mit einer einzelnen RTX 4090 ausgelegt.
 - `--enforce-eager` ist auf Single-4090-Desktop-Systemen aktiviert, um Startup-OOMs waehrend Compile- und Autotuning-Phasen zu vermeiden.
 - `--trust-remote-code` ist fuer `Qwen/Qwen3-14B-AWQ` aktiviert.

@@ -34,5 +34,5 @@ services:
       - --tool-call-parser
       - hermes
       - --max-model-len
-      - "4096"
+      - "40960"
       - --trust-remote-code
