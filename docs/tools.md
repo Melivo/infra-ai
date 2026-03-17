@@ -64,12 +64,16 @@ V1 unterstuetzt bewusst noch nicht:
 - spezialisierte Turn-Typen (`UserTurn`, `AssistantTurn`, `ToolCallTurn`, `ToolResultTurn`, `FinalTurn`) bilden die internen Rollen explizit statt ueber ein einzelnes ueberladenes Datamodell.
 - `ExecutionStep` ist die autoritative Orchestrierungseinheit pro Modellschritt. Sie haelt explizit Reasoning-, Planning-, Refinement- und Finalization-Turns sowie den aktuellen `ExecutionPlan`.
 - `AssistantTurn.phase` unterscheidet explizit `reasoning`, `tool_plan`, `refinement` und `finalization`; diese Phase wird an der Provider-Boundary moeglichst direkt gesetzt statt spaeter global erraten.
-- `ExecutionPlan` haelt die geplanten Tool-Calls eines Steps als explizite Knotenliste mit Strategie, Abhaengigkeiten, Knotenstatus und Ergebnisbezug. Abhaengigkeiten tragen bereits einen Ursprung (`declared` vs. `execution_strategy`), auch wenn V1 aktuell nur die sequentielle Strategiekette nutzt.
+- `ExecutionPlan` haelt die geplanten Tool-Calls eines Steps als explizite Knotenliste mit Strategie, Abhaengigkeiten, Knotenstatus und Ergebnisbezug.
+- Jeder `ExecutionPlanNode` trennt jetzt zwischen deklarierter Planstruktur (`declared_dependencies`), zur Laufstrategie abgeleiteten Constraints (`strategy_dependencies`) und dem spaeter mutierten Fortschritt (`state`, `result`).
+- Die primare V1-Erzeugung ist damit explizit: deklarierter Plan ohne implizite Reihenfolgelogik, danach sequentielle Strategieableitung, danach Laufzeitfortschritt.
 - `NormalizedMessage`, `NormalizedToolCall` und `NormalizedGeneration` bleiben als Kompatibilitaets- und API-Schicht bestehen, z. B. fuer Provider-Request-Serialisierung und den stabilen HTTP-Response-Contract.
 - `GenerationRequest` haelt intern Turns und stellt Provider-Input explizit ueber `to_provider_messages()` bereit.
 - Fuer Tool-Result-Nachrichten ist `content_json` das interne Primaerformat; Provider-Adapter serialisieren strukturierte Inhalte erst an ihrer jeweiligen Grenze in Text.
 
-Mehrere Tool-Calls in einem Modellschritt werden weiterhin sequentiell gegen denselben geplanten Step ausgefuehrt. Das ist bewusst noch kein vollwertiger Tool-Graph-Executor, aber der Step enthaelt jetzt bereits einen expliziten `ExecutionPlan` mit Knotenstatus statt nur lose rekonstruierter Listen.
+Mehrere Tool-Calls in einem Modellschritt werden weiterhin sequentiell gegen denselben geplanten Step ausgefuehrt. Das ist bewusst noch kein vollwertiger Tool-Graph-Executor, aber der Step enthaelt jetzt bereits einen expliziten `ExecutionPlan` mit getrennten Deklarations-, Strategie- und Fortschrittsebenen statt nur lose rekonstruierter Listen.
+
+`execution_steps_from_turns()` bleibt als Kompatibilitaets- und Recovery-Pfad erhalten. Die primaere Orchestrierungsquelle ist aber nicht mehr das spaetere Erraten aus Transport-Turns, sondern der explizit erzeugte Step- und Plan-State aus dem Provider-Parser plus dessen Mutationen im Tool-Loop.
 
 ## Fehlervertrag
 

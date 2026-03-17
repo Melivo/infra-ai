@@ -9,7 +9,11 @@ from router.conversation import (
     FinalTurn,
     StepPhase,
     ToolCallTurn,
-    build_execution_plan,
+    append_declared_plan_node,
+    create_declared_execution_plan,
+    create_execution_step,
+    derive_strategy_dependencies,
+    validate_execution_plan,
 )
 from router.schemas import JSONValue
 
@@ -180,12 +184,23 @@ def _assistant_step(
         phase=phase,
         metadata=dict(metadata),
     )
+    plan = create_declared_execution_plan()
+    for turn in tool_call_turns:
+        if isinstance(turn, ToolCallTurn):
+            plan = append_declared_plan_node(plan, turn)
+    plan = derive_strategy_dependencies(plan)
+    validate_execution_plan(plan)
+
     turns: list[ConversationTurn] = [assistant_turn]
     turns.extend(tool_call_turns)
+    step = create_execution_step()
     step = ExecutionStep(
+        reasoning_turns=step.reasoning_turns,
         planning_turns=[assistant_turn] if tool_call_turns else [],
+        refinement_turns=step.refinement_turns,
         finalization_turns=[] if tool_call_turns else [assistant_turn],
-        plan=build_execution_plan([turn for turn in tool_call_turns if isinstance(turn, ToolCallTurn)]),
+        plan=plan,
+        final=step.final,
     )
     if not tool_call_turns:
         final_turn = FinalTurn(
@@ -195,7 +210,7 @@ def _assistant_step(
         turns.append(final_turn)
         step = ExecutionStep(
             finalization_turns=[assistant_turn],
-            plan=build_execution_plan([]),
+            plan=plan,
             final=final_turn,
         )
     return ParsedProviderStep(turns=turns, step=step)

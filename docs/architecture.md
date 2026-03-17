@@ -40,7 +40,7 @@ The router controls:
 - routing modes and policies
 - provider selection
 - provider response normalization into turn and execution-step state
-- tool-loop orchestration against explicit step and plan state
+- tool-loop orchestration against explicit declared-plan, strategy and progress state
 - sequential plan execution with explicit dependency-carrying plan nodes
 - provider error normalization
 - timeout policy
@@ -48,6 +48,18 @@ The router controls:
 - public capabilities and model discovery endpoints
 
 The router is frontend-agnostic.
+
+Within the router, the orchestration direction is intentionally:
+
+```text
+provider output
+  -> explicit execution step state
+  -> explicit execution plan state
+  -> execution progression
+  -> turns / history compatibility views
+```
+
+V1 still keeps `execution_steps_from_turns()` as a compatibility and recovery path, but orchestration truth now comes primarily from parser-produced step state and explicit plan transitions during the tool loop.
 
 ### Provider Layer
 

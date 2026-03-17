@@ -7,11 +7,11 @@ import json
 
 from router.conversation import (
     ConversationTurn,
-    ExecutionNodeStatus,
     ExecutionStep,
-    apply_tool_result_to_step,
+    compute_executable_plan_nodes,
     execution_steps_from_turns,
-    next_executable_plan_nodes,
+    mark_step_node_completed,
+    planned_plan_nodes,
     tool_result_to_turn,
     turn_to_tool_call,
 )
@@ -81,7 +81,7 @@ class ToolLoopEngine:
             turns.extend(parsed_step.turns)
             steps.append(parsed_step.step)
             current_step = parsed_step.step
-            planned_nodes = [node for node in current_step.plan.nodes if node.status == ExecutionNodeStatus.PLANNED]
+            planned_nodes = planned_plan_nodes(current_step.plan)
             if not planned_nodes:
                 return ToolLoopResult(
                     turns=list(turns),
@@ -112,7 +112,7 @@ class ToolLoopEngine:
                 step_signatures.add(tool_call_signature)
 
             while True:
-                executable_nodes = next_executable_plan_nodes(steps[-1].plan)
+                executable_nodes = compute_executable_plan_nodes(steps[-1].plan)
                 if not executable_nodes:
                     break
                 executable_node = executable_nodes[0]
@@ -135,7 +135,7 @@ class ToolLoopEngine:
                 ]
                 result_turn = tool_result_to_turn(result)
                 turns.append(result_turn)
-                steps[-1] = apply_tool_result_to_step(steps[-1], result_turn)
+                steps[-1] = mark_step_node_completed(steps[-1], result_turn)
 
     async def run_tool_call(
         self,

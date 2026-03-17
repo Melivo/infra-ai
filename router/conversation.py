@@ -102,7 +102,8 @@ class ExecutionDependency:
 @dataclass(frozen=True)
 class ExecutionPlanNode:
     tool_call: ToolCallTurn
-    dependencies: list[ExecutionDependency] = field(default_factory=list)
+    declared_dependencies: list[ExecutionDependency] = field(default_factory=list)
+    strategy_dependencies: list[ExecutionDependency] = field(default_factory=list)
     state: ExecutionNodeStatus = ExecutionNodeStatus.PLANNED
     result: ToolResultTurn | None = None
 
@@ -111,8 +112,24 @@ class ExecutionPlanNode:
         return self.state
 
     @property
+    def dependencies(self) -> list[ExecutionDependency]:
+        return [*self.declared_dependencies, *self.strategy_dependencies]
+
+    @property
+    def declared_dependency_call_ids(self) -> list[str]:
+        return [dependency.call_id for dependency in self.declared_dependencies]
+
+    @property
+    def strategy_dependency_call_ids(self) -> list[str]:
+        return [dependency.call_id for dependency in self.strategy_dependencies]
+
+    @property
     def depends_on_call_ids(self) -> list[str]:
-        return [dependency.call_id for dependency in self.dependencies]
+        call_ids: list[str] = []
+        for dependency in self.dependencies:
+            if dependency.call_id not in call_ids:
+                call_ids.append(dependency.call_id)
+        return call_ids
 
 
 @dataclass(frozen=True)
@@ -149,6 +166,17 @@ class ExecutionStep:
         if self.reasoning_turns:
             return self.reasoning_turns[-1]
         return None
+
+
+def create_execution_step() -> ExecutionStep:
+    return ExecutionStep()
+
+
+def create_declared_execution_plan(
+    *,
+    strategy: ExecutionStrategy = ExecutionStrategy.SEQUENTIAL,
+) -> ExecutionPlan:
+    return ExecutionPlan(strategy=strategy)
 
 
 def message_to_turns(message: NormalizedMessage) -> list[ConversationTurn]:
@@ -247,25 +275,85 @@ def build_execution_plan(
     *,
     strategy: ExecutionStrategy = ExecutionStrategy.SEQUENTIAL,
 ) -> ExecutionPlan:
+    plan = create_declared_execution_plan(strategy=strategy)
+    for tool_call in tool_calls:
+        plan = append_declared_plan_node(plan, tool_call)
+    plan = derive_strategy_dependencies(plan)
+    validate_execution_plan(plan)
+    return plan
+
+
+def append_declared_plan_node(
+    plan: ExecutionPlan,
+    tool_call: ToolCallTurn,
+    *,
+    depends_on_call_ids: list[str] | None = None,
+) -> ExecutionPlan:
+    if any(node.tool_call.tool_call_id == tool_call.tool_call_id for node in plan.nodes):
+        return plan
+
+    declared_dependencies = [
+        ExecutionDependency(call_id=call_id, origin=ExecutionDependencyOrigin.DECLARED)
+        for call_id in (depends_on_call_ids or [])
+    ]
+    return replace(
+        plan,
+        nodes=[
+            *plan.nodes,
+            ExecutionPlanNode(
+                tool_call=tool_call,
+                declared_dependencies=declared_dependencies,
+            ),
+        ],
+    )
+
+
+def derive_strategy_dependencies(plan: ExecutionPlan) -> ExecutionPlan:
+    if plan.strategy != ExecutionStrategy.SEQUENTIAL:
+        return plan
+
     nodes: list[ExecutionPlanNode] = []
     previous_call_id: str | None = None
-    for tool_call in tool_calls:
-        dependencies: list[ExecutionDependency] = []
-        if previous_call_id is not None and strategy == ExecutionStrategy.SEQUENTIAL:
-            dependencies.append(
+    for node in plan.nodes:
+        strategy_dependencies: list[ExecutionDependency] = []
+        if previous_call_id is not None:
+            strategy_dependencies.append(
                 ExecutionDependency(
                     call_id=previous_call_id,
                     origin=ExecutionDependencyOrigin.EXECUTION_STRATEGY,
                 )
             )
-        nodes.append(
-            ExecutionPlanNode(
-                tool_call=tool_call,
-                dependencies=dependencies,
-            )
-        )
-        previous_call_id = tool_call.tool_call_id
-    return ExecutionPlan(strategy=strategy, nodes=nodes)
+        nodes.append(replace(node, strategy_dependencies=strategy_dependencies))
+        previous_call_id = node.tool_call.tool_call_id
+    return replace(plan, nodes=nodes)
+
+
+def validate_execution_plan(plan: ExecutionPlan) -> None:
+    known_call_ids: list[str] = []
+    for node in plan.nodes:
+        call_id = node.tool_call.tool_call_id
+        if call_id in known_call_ids:
+            raise ValueError(f"Execution plan contains duplicate tool call id: {call_id}")
+        known_call_ids.append(call_id)
+
+    known_call_id_set = set(known_call_ids)
+    for node in plan.nodes:
+        seen_dependency_keys: set[tuple[str, ExecutionDependencyOrigin]] = set()
+        for dependency in node.dependencies:
+            dependency_key = (dependency.call_id, dependency.origin)
+            if dependency_key in seen_dependency_keys:
+                raise ValueError(
+                    f"Execution plan node {node.tool_call.tool_call_id} contains duplicate dependency {dependency.call_id}"
+                )
+            seen_dependency_keys.add(dependency_key)
+            if dependency.call_id == node.tool_call.tool_call_id:
+                raise ValueError(
+                    f"Execution plan node {node.tool_call.tool_call_id} cannot depend on itself"
+                )
+            if dependency.call_id not in known_call_id_set:
+                raise ValueError(
+                    f"Execution plan node {node.tool_call.tool_call_id} depends on unknown call id {dependency.call_id}"
+                )
 
 
 def apply_tool_result_to_plan(plan: ExecutionPlan, result: ToolResultTurn) -> ExecutionPlan:
@@ -283,11 +371,23 @@ def apply_tool_result_to_plan(plan: ExecutionPlan, result: ToolResultTurn) -> Ex
     return plan
 
 
+def mark_plan_node_completed(plan: ExecutionPlan, result: ToolResultTurn) -> ExecutionPlan:
+    return apply_tool_result_to_plan(plan, result)
+
+
 def apply_tool_result_to_step(step: ExecutionStep, result: ToolResultTurn) -> ExecutionStep:
     return replace(step, plan=apply_tool_result_to_plan(step.plan, result))
 
 
-def next_executable_plan_nodes(plan: ExecutionPlan) -> list[ExecutionPlanNode]:
+def mark_step_node_completed(step: ExecutionStep, result: ToolResultTurn) -> ExecutionStep:
+    return apply_tool_result_to_step(step, result)
+
+
+def planned_plan_nodes(plan: ExecutionPlan) -> list[ExecutionPlanNode]:
+    return [node for node in plan.nodes if node.state == ExecutionNodeStatus.PLANNED]
+
+
+def compute_executable_plan_nodes(plan: ExecutionPlan) -> list[ExecutionPlanNode]:
     completed_call_ids = {
         node.tool_call.tool_call_id
         for node in plan.nodes
@@ -305,6 +405,10 @@ def next_executable_plan_nodes(plan: ExecutionPlan) -> list[ExecutionPlanNode]:
     return executable
 
 
+def next_executable_plan_nodes(plan: ExecutionPlan) -> list[ExecutionPlanNode]:
+    return compute_executable_plan_nodes(plan)
+
+
 def execution_steps_from_turns(turns: list[ConversationTurn]) -> list[ExecutionStep]:
     """Rebuild explicit execution-step state from the router's turn transport."""
     steps: list[ExecutionStep] = []
@@ -313,7 +417,7 @@ def execution_steps_from_turns(turns: list[ConversationTurn]) -> list[ExecutionS
     for turn in turns:
         if isinstance(turn, AssistantTurn):
             if current_step is None or current_step.final is not None or current_step.tool_results:
-                current_step = ExecutionStep()
+                current_step = create_execution_step()
                 steps.append(current_step)
             current_step = _append_assistant_turn(current_step, turn)
             steps[-1] = current_step
@@ -501,27 +605,10 @@ def _append_assistant_turn(step: ExecutionStep, turn: AssistantTurn) -> Executio
 
 
 def _append_tool_call_to_plan(plan: ExecutionPlan, tool_call: ToolCallTurn) -> ExecutionPlan:
-    if any(node.tool_call.tool_call_id == tool_call.tool_call_id for node in plan.nodes):
-        return plan
-
-    dependencies: list[ExecutionDependency] = []
-    if plan.strategy == ExecutionStrategy.SEQUENTIAL and plan.nodes:
-        dependencies.append(
-            ExecutionDependency(
-                call_id=plan.nodes[-1].tool_call.tool_call_id,
-                origin=ExecutionDependencyOrigin.EXECUTION_STRATEGY,
-            )
-        )
-    return replace(
-        plan,
-        nodes=[
-            *plan.nodes,
-            ExecutionPlanNode(
-                tool_call=tool_call,
-                dependencies=dependencies,
-            ),
-        ],
-    )
+    updated_plan = append_declared_plan_node(plan, tool_call)
+    updated_plan = derive_strategy_dependencies(updated_plan)
+    validate_execution_plan(updated_plan)
+    return updated_plan
 
 
 def _generation_metadata(generation: NormalizedGeneration) -> dict[str, JSONValue]:

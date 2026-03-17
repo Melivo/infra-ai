@@ -15,13 +15,18 @@ from router.conversation import (
     TurnType,
     UserTurn,
     apply_tool_result_to_step,
+    append_declared_plan_node,
     build_execution_plan,
+    compute_executable_plan_nodes,
+    create_declared_execution_plan,
     execution_steps_from_turns,
     generation_to_turns,
+    mark_plan_node_completed,
     messages_to_turns,
     next_executable_plan_nodes,
     turns_to_generation,
     turns_to_messages,
+    validate_execution_plan,
 )
 from router.normalization import GenerationRequest, NormalizedGeneration, NormalizedMessage, NormalizedToolCall
 
@@ -147,11 +152,59 @@ class ConversationTurnsTests(unittest.TestCase):
         self.assertEqual(len(steps[-1].tool_calls), 2)
         self.assertEqual(len(steps[-1].plan.nodes), 2)
         self.assertIsInstance(steps[-1].plan.nodes[0], ExecutionPlanNode)
+        self.assertEqual(steps[-1].plan.nodes[0].declared_dependency_call_ids, [])
+        self.assertEqual(steps[-1].plan.nodes[0].strategy_dependency_call_ids, [])
         self.assertEqual(steps[-1].plan.nodes[0].depends_on_call_ids, [])
+        self.assertEqual(steps[-1].plan.nodes[1].declared_dependency_call_ids, [])
+        self.assertEqual(steps[-1].plan.nodes[1].strategy_dependency_call_ids, ["call-1"])
         self.assertEqual(steps[-1].plan.nodes[1].depends_on_call_ids, ["call-1"])
         self.assertEqual(steps[-1].plan.nodes[1].dependencies[0].origin, ExecutionDependencyOrigin.EXECUTION_STRATEGY)
         self.assertEqual(generation.message.content, "calling tools")
         self.assertEqual([tool_call.name for tool_call in generation.message.tool_calls], ["echo", "add_numbers"])
+
+    def test_declared_plan_dependencies_stay_distinct_from_strategy_dependencies(self) -> None:
+        plan = create_declared_execution_plan()
+        plan = append_declared_plan_node(
+            plan,
+            ToolCallTurn(tool_name="echo", tool_call_id="call-1", tool_arguments={"message": "hi"}),
+        )
+        plan = append_declared_plan_node(
+            plan,
+            ToolCallTurn(tool_name="add_numbers", tool_call_id="call-2", tool_arguments={"a": 2, "b": 3}),
+            depends_on_call_ids=["call-1"],
+        )
+        validate_execution_plan(plan)
+
+        self.assertEqual(plan.nodes[0].declared_dependency_call_ids, [])
+        self.assertEqual(plan.nodes[0].strategy_dependency_call_ids, [])
+        self.assertEqual(plan.nodes[1].declared_dependency_call_ids, ["call-1"])
+        self.assertEqual(plan.nodes[1].strategy_dependency_call_ids, [])
+        self.assertEqual(plan.nodes[1].dependencies[0].origin, ExecutionDependencyOrigin.DECLARED)
+
+    def test_build_execution_plan_derives_strategy_dependencies_after_declaration(self) -> None:
+        plan = build_execution_plan(
+            [
+                ToolCallTurn(tool_name="echo", tool_call_id="call-1", tool_arguments={"message": "hi"}),
+                ToolCallTurn(tool_name="add_numbers", tool_call_id="call-2", tool_arguments={"a": 2, "b": 3}),
+            ]
+        )
+
+        self.assertEqual(plan.nodes[0].declared_dependency_call_ids, [])
+        self.assertEqual(plan.nodes[0].strategy_dependency_call_ids, [])
+        self.assertEqual(plan.nodes[1].declared_dependency_call_ids, [])
+        self.assertEqual(plan.nodes[1].strategy_dependency_call_ids, ["call-1"])
+        self.assertEqual(plan.nodes[1].depends_on_call_ids, ["call-1"])
+
+    def test_validate_execution_plan_rejects_unknown_declared_dependency(self) -> None:
+        plan = create_declared_execution_plan()
+        plan = append_declared_plan_node(
+            plan,
+            ToolCallTurn(tool_name="echo", tool_call_id="call-1", tool_arguments={"message": "hi"}),
+            depends_on_call_ids=["missing-call"],
+        )
+
+        with self.assertRaises(ValueError):
+            validate_execution_plan(plan)
 
     def test_generation_request_uses_turns_as_primary_internal_state(self) -> None:
         request = GenerationRequest.from_messages(
@@ -179,6 +232,8 @@ class ConversationTurnsTests(unittest.TestCase):
         self.assertEqual(len(steps), 1)
         self.assertEqual([turn.tool_name for turn in steps[0].tool_calls], ["echo", "add_numbers"])
         self.assertEqual([turn.tool_name for turn in steps[0].tool_results], ["echo", "add_numbers"])
+        self.assertEqual([node.declared_dependency_call_ids for node in steps[0].plan.nodes], [[], []])
+        self.assertEqual([node.strategy_dependency_call_ids for node in steps[0].plan.nodes], [[], ["call-1"]])
         self.assertEqual([node.depends_on_call_ids for node in steps[0].plan.nodes], [[], ["call-1"]])
         self.assertEqual([node.status for node in steps[0].plan.nodes], [ExecutionNodeStatus.COMPLETED, ExecutionNodeStatus.COMPLETED])
 
@@ -215,6 +270,25 @@ class ConversationTurnsTests(unittest.TestCase):
         self.assertEqual(updated.plan.nodes[0].result.content_json, {"message": "hi"})
         self.assertEqual(updated.plan.nodes[1].status, ExecutionNodeStatus.PLANNED)
 
+    def test_mark_plan_node_completed_only_mutates_execution_progress(self) -> None:
+        plan = build_execution_plan(
+            [
+                ToolCallTurn(tool_name="echo", tool_call_id="call-1", tool_arguments={"message": "hi"}),
+                ToolCallTurn(tool_name="add_numbers", tool_call_id="call-2", tool_arguments={"a": 2, "b": 3}),
+            ]
+        )
+
+        updated_plan = mark_plan_node_completed(
+            plan,
+            ToolResultTurn(tool_name="echo", tool_call_id="call-1", content_json={"message": "hi"}),
+        )
+
+        self.assertEqual(updated_plan.nodes[0].status, ExecutionNodeStatus.COMPLETED)
+        self.assertEqual(updated_plan.nodes[0].result.content_json, {"message": "hi"})
+        self.assertEqual(updated_plan.nodes[0].strategy_dependency_call_ids, [])
+        self.assertEqual(updated_plan.nodes[1].status, ExecutionNodeStatus.PLANNED)
+        self.assertEqual(updated_plan.nodes[1].strategy_dependency_call_ids, ["call-1"])
+
     def test_next_executable_plan_nodes_follow_dependency_and_node_state(self) -> None:
         plan = build_execution_plan(
             [
@@ -223,7 +297,7 @@ class ConversationTurnsTests(unittest.TestCase):
             ]
         )
 
-        first_nodes = next_executable_plan_nodes(plan)
+        first_nodes = compute_executable_plan_nodes(plan)
         updated_step = apply_tool_result_to_step(
             ExecutionStep(plan=plan),
             ToolResultTurn(tool_name="echo", tool_call_id="call-1", content_json={"message": "hi"}),

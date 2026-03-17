@@ -72,6 +72,8 @@ class ProviderOutputParserTests(unittest.TestCase):
         self.assertEqual(parsed.step.planning_turns[-1].phase, StepPhase.TOOL_PLAN)
         self.assertEqual(len(parsed.step.plan.nodes), 1)
         self.assertEqual(parsed.step.plan.nodes[0].status, ExecutionNodeStatus.PLANNED)
+        self.assertEqual(parsed.step.plan.nodes[0].declared_dependency_call_ids, [])
+        self.assertEqual(parsed.step.plan.nodes[0].strategy_dependency_call_ids, [])
         self.assertEqual(turns[1].tool_name, "add_numbers")
         self.assertEqual(turns[1].tool_arguments, {"a": 2, "b": 3})
 
@@ -169,6 +171,8 @@ class ProviderOutputParserTests(unittest.TestCase):
 
         self.assertEqual([turn.type.value for turn in turns], ["assistant", "tool_call", "tool_call"])
         self.assertEqual([turn.tool_name for turn in turns[1:]], ["echo", "add_numbers"])
+        self.assertEqual(parsed.step.plan.nodes[1].declared_dependency_call_ids, [])
+        self.assertEqual(parsed.step.plan.nodes[1].strategy_dependency_call_ids, ["call-1"])
         self.assertEqual(parsed.step.plan.nodes[1].dependencies[0].origin, ExecutionDependencyOrigin.EXECUTION_STRATEGY)
 
     def test_parser_turns_rebuild_public_response_shape_via_compat_boundary(self) -> None:
