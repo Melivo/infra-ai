@@ -80,5 +80,6 @@ Must explicitly check:
 
 ## Push Policy
 
-- After completing a requested change, commit it and push it to `origin/main` immediately unless the user explicitly says not to.
+- For future sessions, after completing any requested change, commit it and push it to `origin/main` immediately unless the user explicitly says not to.
+- Do not wait for a separate `push` instruction after finishing a change.
 - Keep commit messages precise and scoped to the change.
