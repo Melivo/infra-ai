@@ -387,6 +387,8 @@ python3 -m cli --route local --stream "Erklaere in zwei Saetzen, was infra-ai is
 
 Die CLI spricht standardmaessig mit `http://127.0.0.1:8010/v1`, sendet `model=auto` und reicht `route` unveraendert an den Router durch.
 
+Fuer laengere lokale Antworten nutzt die CLI standardmaessig `--max-tokens 3072`. Das ist als grober Standard fuer mehrseitige Prosa gedacht. Wenn die Router-Antwort trotzdem mit `finish_reason=length` endet, markiert die CLI die Ausgabe explizit als abgeschnitten und verweist auf `--max-tokens`.
+
 Aktuelle Streaming-Grenze:
 
 - `--stream` ist fuer `local` und damit auch fuer `auto` gedacht, weil `auto` derzeit deterministisch lokal aufloest.

@@ -167,6 +167,31 @@ def extract_text(response: dict[str, object]) -> str:
     return json.dumps(response, indent=2)
 
 
+def extract_finish_reason(response: dict[str, object]) -> str | None:
+    choices = response.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return None
+
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        return None
+
+    finish_reason = first_choice.get("finish_reason")
+    if isinstance(finish_reason, str):
+        return finish_reason
+
+    return None
+
+
+def render_response_text(response: dict[str, object]) -> str:
+    text = extract_text(response)
+    if extract_finish_reason(response) != "length":
+        return text
+
+    notice = "[output truncated at max_tokens; rerun with a higher --max-tokens value if you need more.]"
+    return f"{text}\n\n{notice}"
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Send a prompt to the infra-ai router.")
     parser.add_argument("prompt", nargs="*", help="Prompt text. Reads stdin when omitted.")
@@ -202,8 +227,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--max-tokens",
         type=int,
-        default=int(os.environ.get("INFRA_AI_ROUTER_MAX_TOKENS", "512")),
-        help="Maximum output tokens passed to the router.",
+        default=int(os.environ.get("INFRA_AI_ROUTER_MAX_TOKENS", "3072")),
+        help="Maximum output tokens passed to the router. Defaults to 3072 for longer local answers.",
     )
     parser.add_argument(
         "--timeout",
@@ -301,7 +326,7 @@ def _run_request(
         print(json.dumps(response, indent=2))
         return
 
-    print(extract_text(response))
+    print(render_response_text(response))
 
 
 def run_interactive(args: argparse.Namespace) -> None:

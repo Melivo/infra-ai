@@ -9,7 +9,13 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from cli import tool_selector
-from cli.main import build_payload, parse_args, run_interactive, should_run_interactive
+from cli.main import (
+    build_payload,
+    parse_args,
+    render_response_text,
+    run_interactive,
+    should_run_interactive,
+)
 
 
 class CLIEntrypointTests(unittest.TestCase):
@@ -39,6 +45,16 @@ class CLIEntrypointTests(unittest.TestCase):
 
         self.assertEqual(args.router_url, "http://127.0.0.1:8010/v1")
         self.assertTrue(args.capabilities)
+
+    def test_parse_args_uses_larger_default_max_tokens(self) -> None:
+        args = parse_args(["Sag hallo"])
+
+        self.assertEqual(args.max_tokens, 3072)
+
+    def test_parse_args_keeps_explicit_max_tokens_override(self) -> None:
+        args = parse_args(["--max-tokens", "512", "Sag hallo"])
+
+        self.assertEqual(args.max_tokens, 512)
 
     def test_interactive_mode_is_selected_for_tty_without_prompt(self) -> None:
         args = parse_args([])
@@ -96,6 +112,40 @@ class CLIEntrypointTests(unittest.TestCase):
 
         run_request.assert_called_once()
         self.assertEqual(run_request.call_args.kwargs["allowed_tools"], [])
+
+    def test_render_response_text_marks_length_truncation(self) -> None:
+        response = {
+            "choices": [
+                {
+                    "finish_reason": "length",
+                    "message": {
+                        "content": "Teilantwort",
+                    },
+                }
+            ]
+        }
+
+        rendered = render_response_text(response)
+
+        self.assertIn("Teilantwort", rendered)
+        self.assertIn("output truncated", rendered)
+        self.assertIn("--max-tokens", rendered)
+
+    def test_render_response_text_keeps_normal_completion_clean(self) -> None:
+        response = {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "content": "Fertige Antwort",
+                    },
+                }
+            ]
+        }
+
+        rendered = render_response_text(response)
+
+        self.assertEqual(rendered, "Fertige Antwort")
 
 
 class ToolSelectorTests(unittest.TestCase):
