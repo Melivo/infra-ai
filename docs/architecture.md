@@ -1,6 +1,6 @@
 # Architecture
 
-The non-negotiable architectural invariants for this repository are defined in [docs/architecture-rules.md](/home/visimeos/Projects/infra-ai/docs/architecture-rules.md).
+The non-negotiable architectural invariants for this repository are defined in [docs/architecture-rules.md](docs/architecture-rules.md).
 
 ## System Structure
 
