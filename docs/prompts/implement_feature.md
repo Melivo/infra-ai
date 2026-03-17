@@ -1,83 +1,86 @@
 # Implement Feature
 
-Use this template when you are ready to implement a feature or refactor in `infra-ai`.
+Nutze diese Vorlage, wenn du bereit bist, ein Feature oder einen Refactor in `infra-ai` umzusetzen.
 
-Before doing anything else, read:
+Bevor du irgendetwas tust, lies:
 
 - `docs/architecture.md`
 - `docs/architecture-rules.md`
 - `AGENTS.md`
-- any directly relevant implementation files
+- alle direkt relevanten Implementierungsdateien
 
-Treat `docs/architecture-rules.md` as binding.
+Behandle `docs/architecture-rules.md` als bindend.
 
-## Mission
+## Auftrag
 
-Implement the smallest safe change directly in code.
+Implementiere die kleinste sichere Aenderung direkt im Code.
 
-This template is implementation-phase focused:
+Diese Vorlage ist auf die Umsetzungsphase ausgerichtet:
 
-- do not stop at planning,
-- if the smallest safe step is not already identified, stop and use `docs/prompts/plan_feature.md` first,
-- do not broaden the scope once the safe step is identified,
-- prefer explicit helpers over clever logic,
-- keep runtime behavior deterministic,
-- preserve current V1 behavior unless the task explicitly changes it.
+- bleibe nicht in der Planung stehen,
+- wenn der kleinste sichere Schritt noch nicht klar ist, stoppe und nutze zuerst `docs/prompts/plan_feature.md`,
+- vergroessere den Scope nicht, sobald der sichere Schritt identifiziert ist,
+- bevorzuge explizite Helper statt cleverer Logik,
+- halte das Laufzeitverhalten deterministisch,
+- bewahre das aktuelle V1-Verhalten, sofern die Aufgabe es nicht explizit aendert.
 
-## Non-Negotiables
+## Nicht verhandelbar
 
-You must preserve all of these:
+All das muss erhalten bleiben:
 
-- `ConversationTurn` remains the primary internal representation.
-- `ExecutionStep` remains the orchestration unit.
-- `ExecutionPlan` remains first-class state.
-- Declared plan structure must be explicit internal state, not only transport metadata on tool calls.
-- Plan state must not be reconstructed ad hoc from turns during execution.
-- Provider-specific parsing stays in `router/provider_output/*`.
-- `ToolLoopEngine` stays provider-agnostic.
-- `NormalizedMessage` and `NormalizedGeneration` remain boundary-only.
-- Tool outputs use structured `content_json`.
-- Execution stays deterministic and bounded by `max_tool_steps`.
-- Compatibility must be handled at boundaries, not in the core.
+- `ConversationTurn` bleibt die primaere interne Repraesentation.
+- `ExecutionStep` bleibt die Orchestrierungseinheit.
+- `ExecutionPlan` bleibt First-Class State.
+- Deklarierte Planstruktur muss expliziter interner State sein, nicht nur Transportmetadaten an Tool-Calls.
+- Plan-State darf waehrend der Ausfuehrung nicht ad hoc aus Turns rekonstruiert werden.
+- Providerspezifisches Parsing bleibt in `router/provider_output/*`.
+- `ToolLoopEngine` bleibt provider-agnostisch.
+- `NormalizedMessage` und `NormalizedGeneration` bleiben Boundary-only.
+- Tool-Outputs nutzen strukturiertes `content_json`.
+- Die Ausfuehrung bleibt deterministisch und durch `max_tool_steps` begrenzt.
+- Kompatibilitaet wird an Boundaries behandelt, nicht im Core.
 
-## Implementation Rules
+## Umsetzungsregeln
 
-- Make the smallest clean change that solves the task.
-- Keep declaration-spec state, declared structure, strategy-derived constraints, and execution progress separate.
-- Do not add parallel execution, MCP, RAG, or agent-framework behavior unless explicitly requested.
-- Do not leak provider logic into router core orchestration.
-- Do not reintroduce `Normalized*` models into the core.
-- Prefer small, explicit helpers and narrow data shapes.
-- Update tests together with the code change.
-- Update docs only if the implementation meaningfully changes architectural wording.
+- Mache die kleinste saubere Aenderung, die die Aufgabe loest.
+- Halte declaration-spec state, deklarierte Struktur, strategy-derived constraints und execution progress getrennt.
+- Fuehre keine Parallelisierung, kein MCP, kein RAG und kein Agent-Framework-Verhalten ein, sofern nicht explizit verlangt.
+- Fuehre keine providerspezifische Logik in die Router-Orchestrierung ein.
+- Fuehre keine `Normalized*`-Modelle wieder in den Core ein.
+- Bevorzuge kleine, explizite Helper und schmale Datenstrukturen.
+- Aktualisiere Tests zusammen mit der Codeaenderung.
+- Aktualisiere Doku nur dann, wenn sich die architektonische Aussage der Implementierung wirklich aendert.
 
-## Required Workflow
+## Erforderlicher Workflow
 
-1. Inspect the relevant files and identify the current flow.
-2. Implement the smallest explicit change in code.
-3. Add or update targeted tests for the changed behavior.
-4. Run the most relevant tests for the touched surfaces.
-5. Fix only the failures introduced by the change.
+1. Pruefe die relevanten Dateien und identifiziere den aktuellen Ablauf.
+2. Bevorzuge Red/Green-TDD, wenn die Aenderung Verhalten betrifft.
+3. Schreibe oder aktualisiere zuerst den kleinsten gezielten Test fuer das gewuenschte Verhalten oder die Regression.
+4. Bestaetige, dass dieser Test aus dem erwarteten Grund fehlschlaegt.
+5. Implementiere danach die kleinste explizite Aenderung im Code.
+6. Fuehre die relevantesten Tests fuer die beruehrten Flaechen aus.
+7. Behebe nur die Fehler, die durch die Aenderung eingefuehrt oder sichtbar gemacht wurden.
+8. Wenn Red/Green-TDD hier kein guter Fit ist, begruende das kurz und nutze den schmalsten sinnvollen Verifikationsweg.
 
-## Review Checks
+## Review-Checks
 
-Before finishing, verify:
+Pruefe vor dem Abschluss:
 
-- Does this keep `ConversationTurn` as the core representation?
-- Does orchestration still operate on `ExecutionStep` and `ExecutionPlan`?
-- Is plan truth explicit rather than reconstructed from turns?
-- Is declared structure represented as explicit plan/declaration state rather than only transport metadata?
-- Is provider-specific logic confined to `router/provider_output/*`?
-- Does the tool loop remain provider-agnostic?
-- Are `Normalized*` models still boundary-only?
-- Is deterministic bounded execution preserved?
-- Is backward compatibility handled at boundaries instead of in the core?
+- Bleibt `ConversationTurn` die Core-Repraesentation?
+- Arbeitet die Orchestrierung weiterhin auf `ExecutionStep` und `ExecutionPlan`?
+- Ist die Planwahrheit explizit statt aus Turns rekonstruiert?
+- Ist deklarierte Struktur als expliziter Plan-/Declaration-State modelliert statt nur als Transportmetadaten?
+- Bleibt providerspezifische Logik auf `router/provider_output/*` beschraenkt?
+- Bleibt der Tool-Loop provider-agnostisch?
+- Bleiben `Normalized*`-Modelle Boundary-only?
+- Bleibt die Ausfuehrung deterministisch und begrenzt?
+- Bleibt Rueckwaertskompatibilitaet an den Boundaries statt im Core?
 
-## Required Output Shape
+## Erforderliche Ausgabeform
 
-Keep the final report short and concrete.
+Halte den Abschlussbericht kurz und konkret.
 
-Include:
+Enthalten sein muessen:
 
 - `Implemented`
 - `Tests`
@@ -85,9 +88,9 @@ Include:
 - `Files`
 - `Notes`
 
-## Response Style
+## Antwortstil
 
-- Report the concrete change, not a plan.
-- Mention the files you changed.
-- Mention the tests you ran and whether they passed.
-- Call out any intentional limitations or follow-up risks.
+- Berichte ueber die konkrete Aenderung, nicht ueber einen Plan.
+- Nenne die Dateien, die du geaendert hast.
+- Nenne die Tests, die du ausgefuehrt hast, und ob sie bestanden haben.
+- Benenne bewusste Einschraenkungen oder verbleibende Risiken.

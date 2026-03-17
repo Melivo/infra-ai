@@ -1,85 +1,91 @@
 # AGENTS
 
-This file defines the default Codex working convention for `Melivo/infra-ai`.
+Diese Datei definiert die Standard-Arbeitskonvention fuer Codex in `Melivo/infra-ai`.
 
-## Authority Order
+## Prioritaetsreihenfolge
 
-When these documents exist, follow them in this order:
+Wenn diese Dokumente vorhanden sind, gelten sie in dieser Reihenfolge:
 
 1. `docs/architecture-rules.md`
 2. `docs/architecture.md`
 3. `AGENTS.md`
-4. task-specific prompt files under `docs/prompts/`
+4. aufgabenspezifische Prompt-Dateien unter `docs/prompts/`
 
-If there is a conflict, architecture rules win.
+Bei Konflikten haben die Architekturregeln Vorrang.
 
-## Default Working Mode
+## Standard-Arbeitsmodus
 
-- Default: work directly without sub-agents.
-- If the user says `nutze deine agenten`, `nutze die 3 agenten`, or equivalent, use this standard 3-agent setup:
+- Standard: direkt ohne Sub-Agents arbeiten.
+- Wenn der Nutzer `nutze deine agenten`, `nutze die 3 agenten` oder etwas Gleichwertiges sagt, nutze dieses Standard-Setup mit 3 Rollen:
   - Architecture / Implementation Agent
   - QA / Invariants Agent
   - Docs / Prompt Hygiene Agent
-- Reuse the same 3-role structure unless the user asks for a different split.
-- Do not invent additional agent roles unless there is a strong task-specific reason.
+- Verwende dieselbe 3-Rollen-Struktur wieder, sofern der Nutzer keine andere Aufteilung verlangt.
+- Erfinde keine weiteren Agent-Rollen, sofern es dafuer keinen starken, aufgabenspezifischen Grund gibt.
 
-## Agent Responsibilities
+## Verantwortlichkeiten der Agents
 
 ### 1. Architecture / Implementation Agent
 
-- owns code changes
-- preserves router architectural invariants
-- works primarily in:
+- verantwortet Codeaenderungen
+- bewahrt die architektonischen Invarianten des Routers
+- arbeitet hauptsaechlich in:
   - `router/conversation.py`
   - `router/tool_loop.py`
   - `router/provider_output/*`
-  - related tests and docs
+  - relevanten Tests und Doku
 
-Must enforce:
+Muss durchsetzen:
 
 - Turn-First Core
-- `ExecutionStep` as orchestration unit
-- `ExecutionPlan` as first-class state
-- provider boundary isolation
-- no `Normalized*` leakage into the core
+- `ExecutionStep` als Orchestrierungseinheit
+- `ExecutionPlan` als First-Class State
+- Isolation der Provider-Grenze
+- kein `Normalized*`-Leakage in den Core
 
 ### 2. QA / Invariants Agent
 
-- reviews for architecture-rule violations
-- focuses on hidden coupling, determinism, boundary regressions, and missing tests
+- prueft auf Verstoesse gegen die Architekturregeln
+- fokussiert auf versteckte Kopplung, Determinismus, Boundary-Regressionen und fehlende Tests
 
-Must explicitly check:
+Muss explizit pruefen:
 
-- no provider-specific logic in router core
-- no ad hoc plan reconstruction during execution
-- no reintroduction of `NormalizedMessage` / `NormalizedGeneration` as core models
-- deterministic bounded tool execution
-- compatibility preserved at HTTP/provider boundaries
+- keine providerspezifische Logik im Router-Core
+- keine ad-hoc Rekonstruktion des Plans waehrend der Ausfuehrung
+- keine Wiedereinfuehrung von `NormalizedMessage` / `NormalizedGeneration` als Core-Modelle
+- deterministische, begrenzte Tool-Ausfuehrung
+- erhaltene Kompatibilitaet an HTTP-/Provider-Grenzen
 
 ### 3. Docs / Prompt Hygiene Agent
 
-- updates docs if implementation changes wording or architectural explanation
-- keeps prompt templates aligned with current repo practice
+- aktualisiert Doku, wenn sich durch die Implementierung Formulierungen oder Architekturerklaerungen aendern
+- haelt Prompt-Templates an die aktuelle Repo-Praxis angepasst
 
-Must explicitly check:
+Muss explizit pruefen:
 
-- architecture docs still match implementation direction
-- prompt templates under `docs/prompts/` stay current
-- missing prompt files are called out explicitly
+- Architektur-Dokumente passen noch zur Implementierungsrichtung
+- Prompt-Templates unter `docs/prompts/` bleiben aktuell
+- fehlende Prompt-Dateien werden explizit benannt
 
-## Repo-Specific Working Rules
+## Repo-spezifische Arbeitsregeln
 
-- Treat `docs/architecture-rules.md` as non-negotiable.
-- Prefer small, explicit, deterministic changes.
-- Keep provider-specific parsing inside `router/provider_output/*`.
-- Keep `ToolLoopEngine` provider-agnostic.
-- Keep `Normalized*` models at boundaries only.
-- Preserve current V1 behavior unless the task explicitly changes it.
-- Do not add parallel execution, MCP, RAG, or agent-framework behavior unless explicitly requested.
-- Use targeted tests for changed behavior.
+- Behandle `docs/architecture-rules.md` als nicht verhandelbar.
+- Bevorzuge kleine, explizite, deterministische Aenderungen.
+- Halte providerspezifisches Parsing innerhalb von `router/provider_output/*`.
+- Halte `ToolLoopEngine` provider-agnostisch.
+- Halte `Normalized*`-Modelle an den Boundaries.
+- Bewahre das aktuelle V1-Verhalten, sofern die Aufgabe es nicht explizit aendert.
+- Fuehre keine Parallelisierung, kein MCP, kein RAG und kein Agent-Framework-Verhalten ein, sofern es nicht explizit verlangt wird.
+- Nutze gezielte Tests fuer geaendertes Verhalten.
 
-## Push Policy
+## Test-Workflow
 
-- For future sessions, after completing any requested change, commit it and push it to `origin/main` immediately unless the user explicitly says not to.
-- Do not wait for a separate `push` instruction after finishing a change.
-- Keep commit messages precise and scoped to the change.
+- Bevorzuge Red/Green-TDD fuer Verhaltensaenderungen, Bugfixes, Router-Core-Refactors, Parser-Aenderungen und Tool-Loop-Invarianten.
+- Wenn praktikabel, schreibe oder aktualisiere zuerst den kleinsten Test, der das gewuenschte Verhalten oder die Regression abbildet, bestaetige den Red-Zustand und implementiere dann die kleinste Aenderung bis Green.
+- Wenn Red/Green-TDD fuer die konkrete Aufgabe kein guter Fit ist, sage das kurz und nutze stattdessen die schmalste sinnvolle Test- und Verifikationsstrategie.
+
+## Push-Policy
+
+- In zukuenftigen Sessions gilt: Nach Abschluss jeder angeforderten Aenderung sofort committen und direkt nach `origin/main` pushen, sofern der Nutzer nicht ausdruecklich etwas anderes sagt.
+- Warte nach Abschluss einer Aenderung nicht auf eine separate `push`-Anweisung.
+- Halte Commit-Messages praezise und eng auf die Aenderung begrenzt.

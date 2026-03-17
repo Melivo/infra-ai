@@ -1,64 +1,66 @@
 # Review
 
-Use this template when reviewing code in `infra-ai`.
+Nutze diese Vorlage, wenn du Code in `infra-ai` pruefst.
 
-Before reviewing, read:
+Bevor du reviewst, lies:
 
 - `docs/architecture.md`
 - `docs/architecture-rules.md`
-- the changed files
-- the relevant tests
+- die geaenderten Dateien
+- die relevanten Tests
 
-Treat the architecture rules as binding review criteria.
+Behandle die Architekturregeln als bindende Review-Kriterien.
 
-## Review Priorities
+## Review-Prioritaeten
 
-Prioritize findings in this order:
+Priorisiere Findings in dieser Reihenfolge:
 
-1. correctness bugs and regressions,
-2. architecture-rule violations,
-3. hidden coupling or boundary leakage,
-4. determinism and bounded-execution risks,
-5. missing or weak tests,
-6. documentation drift.
+1. Korrektheitsfehler und Regressionen
+2. Verstoesse gegen Architekturregeln
+3. versteckte Kopplung oder Boundary-Leakage
+4. Risiken fuer Determinismus und begrenzte Ausfuehrung
+5. fehlende oder zu schwache Tests
+6. Doku-Drift
 
-## Repo-Specific Checks
+## Repo-spezifische Checks
 
-Explicitly check:
+Pruefe explizit:
 
-- no provider-specific logic in router core,
-- no ad hoc plan reconstruction during execution,
-- no fake explicitness where declared structure still only lives on tool-call transport metadata,
-- no reintroduction of `NormalizedMessage` or `NormalizedGeneration` as core models,
-- no bypass of `ExecutionStep` or `ExecutionPlan`,
-- no stringly-typed parsing inside the core where structured data should be used,
-- no loss of deterministic bounded tool execution,
-- no HTTP/provider compatibility break caused by internal refactors.
+- keine providerspezifische Logik im Router-Core
+- keine ad-hoc Rekonstruktion des Plans waehrend der Ausfuehrung
+- keine falsche Explizitheit, bei der deklarierte Struktur weiterhin nur in Tool-Call-Transportmetadaten lebt
+- keine Wiedereinfuehrung von `NormalizedMessage` oder `NormalizedGeneration` als Core-Modelle
+- keine Umgehung von `ExecutionStep` oder `ExecutionPlan`
+- kein String-Parsing im Core dort, wo strukturierte Daten verwendet werden muessen
+- kein Verlust deterministischer, begrenzter Tool-Ausfuehrung
+- kein Kompatibilitaetsbruch an HTTP-/Provider-Grenzen durch interne Refactors
+- bei Verhaltensaenderungen: ob ein gezielter Test vorhanden ist, der vor der Implementierung sinnvoll rot haette werden koennen
+- fehlende Regressionstests dort markieren, wo Red/Green-TDD praktikabel gewesen waere
 
-## Output Format
+## Ausgabeformat
 
-Findings first, ordered by severity.
+Findings zuerst, nach Schweregrad sortiert.
 
-For each finding include:
+Zu jedem Finding gehoeren:
 
-- severity,
-- file reference,
-- the concrete issue,
-- why it matters in this architecture.
+- Schweregrad
+- Dateireferenz
+- das konkrete Problem
+- warum es in dieser Architektur relevant ist
 
-If there are no findings, say exactly:
+Wenn es keine Findings gibt, sage exakt:
 
 `no findings`
 
-Then optionally note:
+Danach optional:
 
-- residual risks,
-- missing tests,
-- minor follow-ups.
+- verbleibende Risiken
+- fehlende Tests
+- kleine Anschlussarbeiten
 
-## Review Style
+## Review-Stil
 
-- Be direct and technical.
-- Prefer concrete evidence over speculation.
-- Do not suggest broad rewrites unless the current design violates the rules.
-- Keep summaries brief after the findings.
+- Sei direkt und technisch.
+- Bevorzuge konkrete Evidenz vor Spekulation.
+- Schlage keine grossen Rewrites vor, solange das aktuelle Design die Regeln nicht verletzt.
+- Halte Zusammenfassungen nach den Findings kurz.
