@@ -66,7 +66,7 @@ V1 unterstuetzt bewusst noch nicht:
 - `AssistantTurn.phase` unterscheidet explizit `reasoning`, `tool_plan`, `refinement` und `finalization`; diese Phase wird an der Provider-Boundary moeglichst direkt gesetzt statt spaeter global erraten.
 - `ExecutionPlan` haelt die geplanten Tool-Calls eines Steps als explizite Knotenliste mit Strategie, Abhaengigkeiten, Knotenstatus und Ergebnisbezug.
 - Jeder `ExecutionPlanNode` trennt jetzt zwischen deklarierter Planstruktur (`declared_dependencies`), zur Laufstrategie abgeleiteten Constraints (`strategy_dependencies`) und dem spaeter mutierten Fortschritt (`state`, `result`).
-- Die primare V1-Erzeugung ist damit explizit: deklarierter Plan ohne implizite Reihenfolgelogik, danach sequentielle Strategieableitung, danach Laufzeitfortschritt.
+- In V1 bleiben deklarierte Abhaengigkeiten eine eigene Planebene. Wenn ein Tool-Call explizite `depends_on_call_ids` mitbringt, werden diese beim Planaufbau validiert und als `declared_dependencies` materialisiert; die sequentielle Reihenfolge bleibt davon getrennt als `strategy_dependencies`.
 - `NormalizedMessage`, `NormalizedToolCall` und `NormalizedGeneration` bleiben als Kompatibilitaets- und API-Schicht bestehen, z. B. fuer Provider-Request-Serialisierung und den stabilen HTTP-Response-Contract.
 - `GenerationRequest` haelt intern Turns und stellt Provider-Input explizit ueber `to_provider_messages()` bereit.
 - Fuer Tool-Result-Nachrichten ist `content_json` das interne Primaerformat; Provider-Adapter serialisieren strukturierte Inhalte erst an ihrer jeweiligen Grenze in Text.

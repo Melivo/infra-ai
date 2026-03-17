@@ -40,6 +40,9 @@ class ExecutionNodeStatus(str, Enum):
     COMPLETED = "completed"
 
 
+DECLARED_DEPENDENCY_METADATA_KEY = "depends_on_call_ids"
+
+
 class ConversationTurn(Protocol):
     type: TurnType
     metadata: dict[str, JSONValue]
@@ -69,6 +72,7 @@ class ToolCallTurn(ConversationTurn):
     tool_name: str
     tool_call_id: str
     tool_arguments: dict[str, JSONValue]
+    declared_dependency_call_ids: list[str] = field(default_factory=list)
     metadata: dict[str, JSONValue] = field(default_factory=dict)
     type: TurnType = field(default=TurnType.TOOL_CALL, init=False)
 
@@ -168,6 +172,10 @@ class ExecutionStep:
         return None
 
 
+class ExecutionPlanValidationError(ValueError):
+    """Raised when explicit execution plan state is structurally invalid."""
+
+
 def create_execution_step() -> ExecutionStep:
     return ExecutionStep()
 
@@ -226,22 +234,29 @@ def messages_to_turns(messages: list[NormalizedMessage]) -> list[ConversationTur
 
 
 def tool_call_to_turn(tool_call: NormalizedToolCall) -> ToolCallTurn:
+    metadata = dict(tool_call.metadata)
     return ToolCallTurn(
         tool_name=tool_call.name,
         tool_call_id=tool_call.call_id,
         tool_arguments=dict(tool_call.arguments),
-        metadata=dict(tool_call.metadata),
+        declared_dependency_call_ids=normalize_declared_dependency_call_ids(
+            metadata.pop(DECLARED_DEPENDENCY_METADATA_KEY, None)
+        ),
+        metadata=metadata,
     )
 
 
 def turn_to_tool_call(turn: ConversationTurn) -> NormalizedToolCall:
     if not isinstance(turn, ToolCallTurn):
         raise ValueError(f"Expected a tool_call turn, got {turn.type!r}")
+    metadata = dict(turn.metadata)
+    if turn.declared_dependency_call_ids:
+        metadata[DECLARED_DEPENDENCY_METADATA_KEY] = list(turn.declared_dependency_call_ids)
     return NormalizedToolCall(
         call_id=turn.tool_call_id,
         name=turn.tool_name,
         arguments=dict(turn.tool_arguments),
-        metadata=dict(turn.metadata),
+        metadata=metadata,
     )
 
 
@@ -290,11 +305,22 @@ def append_declared_plan_node(
     depends_on_call_ids: list[str] | None = None,
 ) -> ExecutionPlan:
     if any(node.tool_call.tool_call_id == tool_call.tool_call_id for node in plan.nodes):
-        return plan
+        raise ExecutionPlanValidationError(
+            f"Execution plan contains duplicate tool call id: {tool_call.tool_call_id}"
+        )
 
+    declared_dependency_call_ids = _resolve_declared_dependency_call_ids(
+        tool_call,
+        depends_on_call_ids=depends_on_call_ids,
+    )
+    _validate_declared_dependency_call_ids(
+        plan,
+        tool_call_id=tool_call.tool_call_id,
+        declared_dependency_call_ids=declared_dependency_call_ids,
+    )
     declared_dependencies = [
         ExecutionDependency(call_id=call_id, origin=ExecutionDependencyOrigin.DECLARED)
-        for call_id in (depends_on_call_ids or [])
+        for call_id in declared_dependency_call_ids
     ]
     return replace(
         plan,
@@ -306,6 +332,40 @@ def append_declared_plan_node(
             ),
         ],
     )
+
+
+def _resolve_declared_dependency_call_ids(
+    tool_call: ToolCallTurn,
+    *,
+    depends_on_call_ids: list[str] | None,
+) -> list[str]:
+    if depends_on_call_ids is not None:
+        return normalize_declared_dependency_call_ids(depends_on_call_ids)
+    return normalize_declared_dependency_call_ids(tool_call.declared_dependency_call_ids)
+
+
+def _validate_declared_dependency_call_ids(
+    plan: ExecutionPlan,
+    *,
+    tool_call_id: str,
+    declared_dependency_call_ids: list[str],
+) -> None:
+    known_call_ids = {node.tool_call.tool_call_id for node in plan.nodes}
+    seen_dependency_call_ids: set[str] = set()
+    for call_id in declared_dependency_call_ids:
+        if call_id in seen_dependency_call_ids:
+            raise ExecutionPlanValidationError(
+                f"Execution plan node {tool_call_id} contains duplicate declared dependency {call_id}"
+            )
+        seen_dependency_call_ids.add(call_id)
+        if call_id == tool_call_id:
+            raise ExecutionPlanValidationError(
+                f"Execution plan node {tool_call_id} cannot depend on itself"
+            )
+        if call_id not in known_call_ids:
+            raise ExecutionPlanValidationError(
+                f"Execution plan node {tool_call_id} depends on unknown call id {call_id}"
+            )
 
 
 def derive_strategy_dependencies(plan: ExecutionPlan) -> ExecutionPlan:
@@ -333,7 +393,10 @@ def validate_execution_plan(plan: ExecutionPlan) -> None:
     for node in plan.nodes:
         call_id = node.tool_call.tool_call_id
         if call_id in known_call_ids:
-            raise ValueError(f"Execution plan contains duplicate tool call id: {call_id}")
+            raise ExecutionPlanValidationError(
+                f"Execution plan contains duplicate tool call id: {call_id}"
+            )
+        _validate_execution_node_progress(node)
         known_call_ids.append(call_id)
 
     known_call_id_set = set(known_call_ids)
@@ -342,18 +405,19 @@ def validate_execution_plan(plan: ExecutionPlan) -> None:
         for dependency in node.dependencies:
             dependency_key = (dependency.call_id, dependency.origin)
             if dependency_key in seen_dependency_keys:
-                raise ValueError(
+                raise ExecutionPlanValidationError(
                     f"Execution plan node {node.tool_call.tool_call_id} contains duplicate dependency {dependency.call_id}"
                 )
             seen_dependency_keys.add(dependency_key)
             if dependency.call_id == node.tool_call.tool_call_id:
-                raise ValueError(
+                raise ExecutionPlanValidationError(
                     f"Execution plan node {node.tool_call.tool_call_id} cannot depend on itself"
                 )
             if dependency.call_id not in known_call_id_set:
-                raise ValueError(
+                raise ExecutionPlanValidationError(
                     f"Execution plan node {node.tool_call.tool_call_id} depends on unknown call id {dependency.call_id}"
                 )
+    _validate_execution_plan_dependency_cycles(plan)
 
 
 def apply_tool_result_to_plan(plan: ExecutionPlan, result: ToolResultTurn) -> ExecutionPlan:
@@ -387,17 +451,23 @@ def planned_plan_nodes(plan: ExecutionPlan) -> list[ExecutionPlanNode]:
     return [node for node in plan.nodes if node.state == ExecutionNodeStatus.PLANNED]
 
 
-def compute_executable_plan_nodes(plan: ExecutionPlan) -> list[ExecutionPlanNode]:
-    completed_call_ids = {
+def completed_plan_call_ids(plan: ExecutionPlan) -> set[str]:
+    return {
         node.tool_call.tool_call_id
         for node in plan.nodes
         if node.state == ExecutionNodeStatus.COMPLETED
     }
+
+
+def compute_executable_plan_nodes(plan: ExecutionPlan) -> list[ExecutionPlanNode]:
+    completed_call_ids = completed_plan_call_ids(plan)
     executable: list[ExecutionPlanNode] = []
     for node in plan.nodes:
-        if node.state != ExecutionNodeStatus.PLANNED:
-            continue
-        if not all(dependency.call_id in completed_call_ids for dependency in node.dependencies):
+        if not is_plan_node_executable(
+            plan,
+            node,
+            completed_call_ids=completed_call_ids,
+        ):
             continue
         executable.append(node)
         if plan.strategy == ExecutionStrategy.SEQUENTIAL:
@@ -407,6 +477,31 @@ def compute_executable_plan_nodes(plan: ExecutionPlan) -> list[ExecutionPlanNode
 
 def next_executable_plan_nodes(plan: ExecutionPlan) -> list[ExecutionPlanNode]:
     return compute_executable_plan_nodes(plan)
+
+
+def is_plan_node_executable(
+    plan: ExecutionPlan,
+    node: ExecutionPlanNode,
+    *,
+    completed_call_ids: set[str] | None = None,
+) -> bool:
+    if node.state != ExecutionNodeStatus.PLANNED:
+        return False
+    return _plan_node_dependencies_satisfied(
+        node,
+        completed_call_ids or completed_plan_call_ids(plan),
+    )
+
+
+def can_execution_plan_make_progress(plan: ExecutionPlan) -> bool:
+    return not planned_plan_nodes(plan) or bool(compute_executable_plan_nodes(plan))
+
+
+def _plan_node_dependencies_satisfied(
+    node: ExecutionPlanNode,
+    completed_call_ids: set[str],
+) -> bool:
+    return all(dependency.call_id in completed_call_ids for dependency in node.dependencies)
 
 
 def execution_steps_from_turns(turns: list[ConversationTurn]) -> list[ExecutionStep]:
@@ -504,14 +599,7 @@ def turn_to_message(turn: ConversationTurn) -> NormalizedMessage:
     if isinstance(turn, ToolCallTurn):
         return NormalizedMessage(
             role="assistant",
-            tool_calls=[
-                NormalizedToolCall(
-                    call_id=turn.tool_call_id,
-                    name=turn.tool_name,
-                    arguments=dict(turn.tool_arguments),
-                    metadata=dict(turn.metadata),
-                )
-            ],
+            tool_calls=[turn_to_tool_call(turn)],
         )
 
     if isinstance(turn, ToolResultTurn):
@@ -609,6 +697,71 @@ def _append_tool_call_to_plan(plan: ExecutionPlan, tool_call: ToolCallTurn) -> E
     updated_plan = derive_strategy_dependencies(updated_plan)
     validate_execution_plan(updated_plan)
     return updated_plan
+
+
+def declared_dependency_call_ids_for_tool_call(tool_call: ToolCallTurn) -> list[str]:
+    return normalize_declared_dependency_call_ids(tool_call.declared_dependency_call_ids)
+
+
+def normalize_declared_dependency_call_ids(value: JSONValue | list[str] | None) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ExecutionPlanValidationError(
+            f"{DECLARED_DEPENDENCY_METADATA_KEY} must be a list of non-empty tool call ids."
+        )
+
+    normalized_call_ids: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            raise ExecutionPlanValidationError(
+                f"{DECLARED_DEPENDENCY_METADATA_KEY} must contain only non-empty tool call ids."
+            )
+        call_id = item.strip()
+        if call_id in normalized_call_ids:
+            raise ExecutionPlanValidationError(
+                f"{DECLARED_DEPENDENCY_METADATA_KEY} contains duplicate tool call id: {call_id}"
+            )
+        normalized_call_ids.append(call_id)
+    return normalized_call_ids
+
+
+def _validate_execution_node_progress(node: ExecutionPlanNode) -> None:
+    if node.state == ExecutionNodeStatus.COMPLETED and node.result is None:
+        raise ExecutionPlanValidationError(
+            f"Execution plan node {node.tool_call.tool_call_id} is completed without a result."
+        )
+    if node.state == ExecutionNodeStatus.PLANNED and node.result is not None:
+        raise ExecutionPlanValidationError(
+            f"Execution plan node {node.tool_call.tool_call_id} cannot hold a result before completion."
+        )
+
+
+def _validate_execution_plan_dependency_cycles(plan: ExecutionPlan) -> None:
+    dependency_graph = {
+        node.tool_call.tool_call_id: node.depends_on_call_ids
+        for node in plan.nodes
+    }
+    visiting: list[str] = []
+    visited: set[str] = set()
+
+    def visit(call_id: str) -> None:
+        if call_id in visited:
+            return
+        if call_id in visiting:
+            cycle = [*visiting[visiting.index(call_id) :], call_id]
+            raise ExecutionPlanValidationError(
+                "Execution plan contains a dependency cycle: " + " -> ".join(cycle)
+            )
+
+        visiting.append(call_id)
+        for dependency_call_id in dependency_graph.get(call_id, []):
+            visit(dependency_call_id)
+        visiting.pop()
+        visited.add(call_id)
+
+    for call_id in dependency_graph:
+        visit(call_id)
 
 
 def _generation_metadata(generation: NormalizedGeneration) -> dict[str, JSONValue]:

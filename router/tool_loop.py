@@ -6,6 +6,7 @@ from http import HTTPStatus
 import json
 
 from router.conversation import (
+    can_execution_plan_make_progress,
     ConversationTurn,
     ExecutionStep,
     compute_executable_plan_nodes,
@@ -111,6 +112,13 @@ class ToolLoopEngine:
                 prepared_calls.append((tool_call, tool_call_signature))
                 step_signatures.add(tool_call_signature)
 
+            if not can_execution_plan_make_progress(steps[-1].plan):
+                raise ToolLoopError(
+                    HTTPStatus.BAD_GATEWAY,
+                    "invalid_model_tool_call",
+                    "Model returned a tool plan that cannot make progress.",
+                )
+
             while True:
                 executable_nodes = compute_executable_plan_nodes(steps[-1].plan)
                 if not executable_nodes:
@@ -136,6 +144,13 @@ class ToolLoopEngine:
                 result_turn = tool_result_to_turn(result)
                 turns.append(result_turn)
                 steps[-1] = mark_step_node_completed(steps[-1], result_turn)
+
+            if planned_plan_nodes(steps[-1].plan):
+                raise ToolLoopError(
+                    HTTPStatus.BAD_GATEWAY,
+                    "invalid_model_tool_call",
+                    "Model returned a tool plan that still has blocked nodes after execution.",
+                )
 
     async def run_tool_call(
         self,

@@ -5,15 +5,14 @@ from __future__ import annotations
 from router.conversation import (
     AssistantTurn,
     ConversationTurn,
+    DECLARED_DEPENDENCY_METADATA_KEY,
     ExecutionStep,
+    ExecutionPlanValidationError,
     FinalTurn,
     StepPhase,
     ToolCallTurn,
-    append_declared_plan_node,
-    create_declared_execution_plan,
+    build_execution_plan,
     create_execution_step,
-    derive_strategy_dependencies,
-    validate_execution_plan,
 )
 from router.schemas import JSONValue
 
@@ -184,12 +183,16 @@ def _assistant_step(
         phase=phase,
         metadata=dict(metadata),
     )
-    plan = create_declared_execution_plan()
-    for turn in tool_call_turns:
-        if isinstance(turn, ToolCallTurn):
-            plan = append_declared_plan_node(plan, turn)
-    plan = derive_strategy_dependencies(plan)
-    validate_execution_plan(plan)
+    try:
+        plan = build_execution_plan(
+            [
+                turn
+                for turn in tool_call_turns
+                if isinstance(turn, ToolCallTurn)
+            ],
+        )
+    except ExecutionPlanValidationError as exc:
+        raise invalid_model_tool_call(str(exc)) from exc
 
     turns: list[ConversationTurn] = [assistant_turn]
     turns.extend(tool_call_turns)
@@ -264,6 +267,10 @@ def _extract_openai_tool_call_turns(tool_calls_payload: JSONValue) -> list[Conve
                 tool_name=name,
                 tool_call_id=call_id,
                 tool_arguments=arguments,
+                declared_dependency_call_ids=_declared_dependency_call_ids_from_payload(
+                    item,
+                    malformed_message="OpenAI-compatible provider returned a malformed tool call envelope.",
+                ),
             )
         )
     return turns
@@ -290,9 +297,34 @@ def _extract_openai_responses_tool_call_turns(output: JSONValue) -> list[Convers
                 tool_name=name,
                 tool_call_id=call_id,
                 tool_arguments=arguments,
+                declared_dependency_call_ids=_declared_dependency_call_ids_from_payload(
+                    item,
+                    malformed_message="OpenAI Responses returned a malformed function call.",
+                ),
             )
         )
     return tool_call_turns
+
+
+def _declared_dependency_call_ids_from_payload(
+    payload: dict[str, JSONValue],
+    *,
+    malformed_message: str,
+) -> list[str]:
+    depends_on_call_ids = payload.get(DECLARED_DEPENDENCY_METADATA_KEY)
+    if depends_on_call_ids is None:
+        return []
+    if not isinstance(depends_on_call_ids, list):
+        raise invalid_model_tool_call(malformed_message)
+    declared_dependency_call_ids: list[str] = []
+    for dependency_call_id in depends_on_call_ids:
+        if not isinstance(dependency_call_id, str) or not dependency_call_id.strip():
+            raise invalid_model_tool_call(malformed_message)
+        normalized_call_id = dependency_call_id.strip()
+        if normalized_call_id in declared_dependency_call_ids:
+            raise invalid_model_tool_call(malformed_message)
+        declared_dependency_call_ids.append(normalized_call_id)
+    return declared_dependency_call_ids
 
 
 def _extract_openai_responses_output_text(output: JSONValue) -> str:

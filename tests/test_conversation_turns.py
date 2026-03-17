@@ -4,10 +4,15 @@ import unittest
 
 from router.conversation import (
     AssistantTurn,
+    DECLARED_DEPENDENCY_METADATA_KEY,
+    ExecutionDependency,
     ExecutionDependencyOrigin,
     ExecutionNodeStatus,
+    ExecutionPlan,
     ExecutionPlanNode,
+    ExecutionPlanValidationError,
     ExecutionStep,
+    ExecutionStrategy,
     FinalTurn,
     StepPhase,
     ToolCallTurn,
@@ -195,15 +200,80 @@ class ConversationTurnsTests(unittest.TestCase):
         self.assertEqual(plan.nodes[1].strategy_dependency_call_ids, ["call-1"])
         self.assertEqual(plan.nodes[1].depends_on_call_ids, ["call-1"])
 
-    def test_validate_execution_plan_rejects_unknown_declared_dependency(self) -> None:
-        plan = create_declared_execution_plan()
-        plan = append_declared_plan_node(
-            plan,
-            ToolCallTurn(tool_name="echo", tool_call_id="call-1", tool_arguments={"message": "hi"}),
-            depends_on_call_ids=["missing-call"],
+    def test_build_execution_plan_uses_tool_call_metadata_for_declared_dependencies(self) -> None:
+        plan = build_execution_plan(
+            [
+                ToolCallTurn(tool_name="echo", tool_call_id="call-1", tool_arguments={"message": "hi"}),
+                ToolCallTurn(
+                    tool_name="add_numbers",
+                    tool_call_id="call-2",
+                    tool_arguments={"a": 2, "b": 3},
+                    declared_dependency_call_ids=["call-1"],
+                ),
+            ]
         )
 
-        with self.assertRaises(ValueError):
+        self.assertEqual(plan.nodes[1].declared_dependency_call_ids, ["call-1"])
+        self.assertEqual(plan.nodes[1].strategy_dependency_call_ids, ["call-1"])
+        self.assertEqual(
+            [dependency.origin for dependency in plan.nodes[1].dependencies],
+            [
+                ExecutionDependencyOrigin.DECLARED,
+                ExecutionDependencyOrigin.EXECUTION_STRATEGY,
+            ],
+        )
+
+    def test_append_declared_plan_node_rejects_unknown_declared_dependency(self) -> None:
+        with self.assertRaises(ExecutionPlanValidationError):
+            append_declared_plan_node(
+                create_declared_execution_plan(),
+                ToolCallTurn(tool_name="echo", tool_call_id="call-1", tool_arguments={"message": "hi"}),
+                depends_on_call_ids=["missing-call"],
+            )
+
+    def test_build_execution_plan_rejects_duplicate_tool_call_ids(self) -> None:
+        with self.assertRaises(ExecutionPlanValidationError):
+            build_execution_plan(
+                [
+                    ToolCallTurn(tool_name="echo", tool_call_id="call-1", tool_arguments={"message": "hi"}),
+                    ToolCallTurn(tool_name="echo", tool_call_id="call-1", tool_arguments={"message": "again"}),
+                ]
+            )
+
+    def test_validate_execution_plan_rejects_cyclic_dependencies(self) -> None:
+        plan = ExecutionPlan(
+            strategy=ExecutionStrategy.SEQUENTIAL,
+            nodes=[
+                ExecutionPlanNode(
+                    tool_call=ToolCallTurn(
+                        tool_name="echo",
+                        tool_call_id="call-1",
+                        tool_arguments={"message": "hi"},
+                    ),
+                    declared_dependencies=[
+                        ExecutionDependency(
+                            call_id="call-2",
+                            origin=ExecutionDependencyOrigin.DECLARED,
+                        )
+                    ],
+                ),
+                ExecutionPlanNode(
+                    tool_call=ToolCallTurn(
+                        tool_name="add_numbers",
+                        tool_call_id="call-2",
+                        tool_arguments={"a": 2, "b": 3},
+                    ),
+                    declared_dependencies=[
+                        ExecutionDependency(
+                            call_id="call-1",
+                            origin=ExecutionDependencyOrigin.DECLARED,
+                        )
+                    ],
+                ),
+            ],
+        )
+
+        with self.assertRaises(ExecutionPlanValidationError):
             validate_execution_plan(plan)
 
     def test_generation_request_uses_turns_as_primary_internal_state(self) -> None:
@@ -236,6 +306,39 @@ class ConversationTurnsTests(unittest.TestCase):
         self.assertEqual([node.strategy_dependency_call_ids for node in steps[0].plan.nodes], [[], ["call-1"]])
         self.assertEqual([node.depends_on_call_ids for node in steps[0].plan.nodes], [[], ["call-1"]])
         self.assertEqual([node.status for node in steps[0].plan.nodes], [ExecutionNodeStatus.COMPLETED, ExecutionNodeStatus.COMPLETED])
+
+    def test_execution_steps_rebuild_declared_dependencies_from_tool_call_turns(self) -> None:
+        turns = [
+            AssistantTurn(content="plan", phase=StepPhase.TOOL_PLAN),
+            ToolCallTurn(tool_name="echo", tool_call_id="call-1", tool_arguments={"message": "hi"}),
+            ToolCallTurn(
+                tool_name="add_numbers",
+                tool_call_id="call-2",
+                tool_arguments={"a": 2, "b": 3},
+                declared_dependency_call_ids=["call-1"],
+            ),
+        ]
+
+        steps = execution_steps_from_turns(turns)
+
+        self.assertEqual(steps[0].plan.nodes[1].declared_dependency_call_ids, ["call-1"])
+        self.assertEqual(steps[0].plan.nodes[1].strategy_dependency_call_ids, ["call-1"])
+
+    def test_turns_to_generation_preserves_declared_dependency_metadata_at_boundary(self) -> None:
+        turns = [
+            AssistantTurn(content="calling tools", phase=StepPhase.TOOL_PLAN),
+            ToolCallTurn(tool_name="echo", tool_call_id="call-1", tool_arguments={"message": "hi"}),
+            ToolCallTurn(
+                tool_name="add_numbers",
+                tool_call_id="call-2",
+                tool_arguments={"a": 2, "b": 3},
+                declared_dependency_call_ids=["call-1"],
+            ),
+        ]
+
+        generation = turns_to_generation(turns)
+
+        self.assertEqual(generation.message.tool_calls[1].metadata[DECLARED_DEPENDENCY_METADATA_KEY], ["call-1"])
 
     def test_execution_steps_classify_finalization_phase(self) -> None:
         turns = [

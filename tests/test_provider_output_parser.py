@@ -175,6 +175,151 @@ class ProviderOutputParserTests(unittest.TestCase):
         self.assertEqual(parsed.step.plan.nodes[1].strategy_dependency_call_ids, ["call-1"])
         self.assertEqual(parsed.step.plan.nodes[1].dependencies[0].origin, ExecutionDependencyOrigin.EXECUTION_STRATEGY)
 
+    def test_parse_openai_chat_declared_dependencies_remain_separate_from_strategy(self) -> None:
+        parsed = parse_provider_step(
+            ProviderOutput(
+                format="openai_chat_completion",
+                body={
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "tool_calls": [
+                                    {
+                                        "id": "call-1",
+                                        "function": {
+                                            "name": "echo",
+                                            "arguments": "{\"message\": \"hi\"}",
+                                        },
+                                    },
+                                    {
+                                        "id": "call-2",
+                                        "depends_on_call_ids": ["call-1"],
+                                        "function": {
+                                            "name": "add_numbers",
+                                            "arguments": "{\"a\": 2, \"b\": 3}",
+                                        },
+                                    },
+                                ],
+                            },
+                            "finish_reason": "tool_calls",
+                        }
+                    ]
+                },
+                provider_name="local_vllm",
+                fallback_model="Qwen",
+            )
+        )
+
+        self.assertEqual(parsed.step.plan.nodes[1].declared_dependency_call_ids, ["call-1"])
+        self.assertEqual(parsed.step.plan.nodes[1].strategy_dependency_call_ids, ["call-1"])
+        self.assertEqual(
+            [dependency.origin for dependency in parsed.step.plan.nodes[1].dependencies],
+            [
+                ExecutionDependencyOrigin.DECLARED,
+                ExecutionDependencyOrigin.EXECUTION_STRATEGY,
+            ],
+        )
+
+    def test_parse_openai_chat_unknown_declared_dependency_raises_provider_error(self) -> None:
+        with self.assertRaises(ProviderError) as exc_info:
+            parse_provider_step(
+                ProviderOutput(
+                    format="openai_chat_completion",
+                    body={
+                        "choices": [
+                            {
+                                "message": {
+                                    "role": "assistant",
+                                    "tool_calls": [
+                                        {
+                                            "id": "call-1",
+                                            "depends_on_call_ids": ["missing-call"],
+                                            "function": {
+                                                "name": "echo",
+                                                "arguments": "{\"message\": \"hi\"}",
+                                            },
+                                        }
+                                    ],
+                                },
+                                "finish_reason": "tool_calls",
+                            }
+                        ]
+                    },
+                    provider_name="local_vllm",
+                    fallback_model="Qwen",
+                )
+            )
+
+        self.assertEqual(exc_info.exception.payload["error"]["type"], "invalid_model_tool_call")
+
+    def test_parse_openai_responses_declared_dependencies_remain_separate_from_strategy(self) -> None:
+        parsed = parse_provider_step(
+            ProviderOutput(
+                format="openai_responses",
+                body={
+                    "id": "resp-1",
+                    "model": "gpt-5.2",
+                    "status": "in_progress",
+                    "output": [
+                        {
+                            "type": "function_call",
+                            "call_id": "call-1",
+                            "name": "echo",
+                            "arguments": "{\"message\": \"hi\"}",
+                        },
+                        {
+                            "type": "function_call",
+                            "call_id": "call-2",
+                            "name": "add_numbers",
+                            "arguments": "{\"a\": 2, \"b\": 3}",
+                            "depends_on_call_ids": ["call-1"],
+                        },
+                    ],
+                },
+                provider_name="openai_responses",
+                provider_slot="openai_reasoning",
+                fallback_model="gpt-5.2",
+            )
+        )
+
+        self.assertEqual(parsed.step.plan.nodes[1].declared_dependency_call_ids, ["call-1"])
+        self.assertEqual(parsed.step.plan.nodes[1].strategy_dependency_call_ids, ["call-1"])
+        self.assertEqual(
+            [dependency.origin for dependency in parsed.step.plan.nodes[1].dependencies],
+            [
+                ExecutionDependencyOrigin.DECLARED,
+                ExecutionDependencyOrigin.EXECUTION_STRATEGY,
+            ],
+        )
+
+    def test_parse_openai_responses_unknown_declared_dependency_raises_provider_error(self) -> None:
+        with self.assertRaises(ProviderError) as exc_info:
+            parse_provider_step(
+                ProviderOutput(
+                    format="openai_responses",
+                    body={
+                        "id": "resp-1",
+                        "model": "gpt-5.2",
+                        "status": "in_progress",
+                        "output": [
+                            {
+                                "type": "function_call",
+                                "call_id": "call-1",
+                                "name": "echo",
+                                "arguments": "{\"message\": \"hi\"}",
+                                "depends_on_call_ids": ["missing-call"],
+                            }
+                        ],
+                    },
+                    provider_name="openai_responses",
+                    provider_slot="openai_reasoning",
+                    fallback_model="gpt-5.2",
+                )
+            )
+
+        self.assertEqual(exc_info.exception.payload["error"]["type"], "invalid_model_tool_call")
+
     def test_parser_turns_rebuild_public_response_shape_via_compat_boundary(self) -> None:
         generation = turns_to_generation(
             parse_provider_generation(
