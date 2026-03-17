@@ -254,8 +254,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--max-tokens",
         type=int,
-        default=int(os.environ.get("INFRA_AI_ROUTER_MAX_TOKENS", "3072")),
-        help="Maximum output tokens passed to the router. Defaults to 3072 for longer local answers.",
+        default=int(os.environ.get("INFRA_AI_ROUTER_MAX_TOKENS", "20000")),
+        help="Maximum output tokens passed to the router. Defaults to 20000 for longer local answers.",
     )
     parser.add_argument(
         "--timeout",

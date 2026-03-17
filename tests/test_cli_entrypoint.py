@@ -50,7 +50,7 @@ class CLIEntrypointTests(unittest.TestCase):
     def test_parse_args_uses_current_default_max_tokens(self) -> None:
         args = parse_args(["Sag hallo"])
 
-        self.assertEqual(args.max_tokens, 3072)
+        self.assertEqual(args.max_tokens, 20000)
 
     def test_parse_args_keeps_explicit_max_tokens_override(self) -> None:
         args = parse_args(["--max-tokens", "512", "Sag hallo"])

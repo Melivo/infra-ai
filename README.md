@@ -387,7 +387,7 @@ python3 -m cli --route local --stream "Erklaere in zwei Saetzen, was infra-ai is
 
 Die CLI spricht standardmaessig mit `http://127.0.0.1:8010/v1`, sendet `model=auto` und reicht `route` unveraendert an den Router durch.
 
-Fuer laengere lokale Antworten nutzt die CLI standardmaessig `--max-tokens 3072`. Das ist als grober Standard fuer mehrseitige Prosa gedacht. Wenn die Router-Antwort trotzdem mit `finish_reason=length` endet, markiert die CLI die Ausgabe explizit als abgeschnitten und verweist auf `--max-tokens`.
+Fuer laengere lokale Antworten nutzt die CLI standardmaessig `--max-tokens 20000`. Das ist als grober Standard fuer deutlich laengere lokale Prosa und Reasoning-Antworten gedacht. Wenn die Router-Antwort trotzdem mit `finish_reason=length` endet, markiert die CLI die Ausgabe explizit als abgeschnitten und verweist auf `--max-tokens`.
 
 Wenn das Modell `<think>...</think>`-Inhalte direkt im Antworttext liefert, verbirgt die CLI diese standardmaessig hinter einer kompakten `Thought for XXs >`-Zeile und zeigt nur die sichtbare Antwort. Mit `--show-thoughts` kannst du den unveraenderten Antworttext inklusive Thinking ausgeben lassen. `--raw` bleibt unveraendert der Escape-Hatch fuer die volle JSON-Antwort.
 
