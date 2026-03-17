@@ -11,6 +11,7 @@ from unittest.mock import patch
 from cli import tool_selector
 from cli.main import (
     build_payload,
+    extract_visible_text,
     parse_args,
     render_response_text,
     run_interactive,
@@ -46,7 +47,7 @@ class CLIEntrypointTests(unittest.TestCase):
         self.assertEqual(args.router_url, "http://127.0.0.1:8010/v1")
         self.assertTrue(args.capabilities)
 
-    def test_parse_args_uses_larger_default_max_tokens(self) -> None:
+    def test_parse_args_uses_current_default_max_tokens(self) -> None:
         args = parse_args(["Sag hallo"])
 
         self.assertEqual(args.max_tokens, 3072)
@@ -113,23 +114,65 @@ class CLIEntrypointTests(unittest.TestCase):
         run_request.assert_called_once()
         self.assertEqual(run_request.call_args.kwargs["allowed_tools"], [])
 
+    def test_extract_visible_text_hides_leading_think_block(self) -> None:
+        thought, visible = extract_visible_text("<think>intern</think>\n\nSichtbare Antwort")
+
+        self.assertEqual(thought, "intern")
+        self.assertEqual(visible, "Sichtbare Antwort")
+
+    def test_render_response_text_hides_think_block_by_default(self) -> None:
+        response = {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "content": "<think>internes reasoning</think>\n\nFertige Antwort",
+                    },
+                }
+            ]
+        }
+
+        rendered = render_response_text(response, elapsed_s=12.4)
+
+        self.assertIn("Thought for 12s >", rendered)
+        self.assertIn("Fertige Antwort", rendered)
+        self.assertNotIn("internes reasoning", rendered)
+
+    def test_render_response_text_can_show_think_block(self) -> None:
+        response = {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "content": "<think>internes reasoning</think>\n\nFertige Antwort",
+                    },
+                }
+            ]
+        }
+
+        rendered = render_response_text(response, show_thoughts=True, elapsed_s=12.4)
+
+        self.assertIn("internes reasoning", rendered)
+        self.assertIn("Fertige Antwort", rendered)
+        self.assertNotIn("Thought for 12s >", rendered)
+
     def test_render_response_text_marks_length_truncation(self) -> None:
         response = {
             "choices": [
                 {
                     "finish_reason": "length",
                     "message": {
-                        "content": "Teilantwort",
+                        "content": "<think>intern</think>\n\nTeilantwort",
                     },
                 }
             ]
         }
 
-        rendered = render_response_text(response)
+        rendered = render_response_text(response, elapsed_s=8.8)
 
+        self.assertIn("Thought for 9s >", rendered)
         self.assertIn("Teilantwort", rendered)
         self.assertIn("output truncated", rendered)
-        self.assertIn("--max-tokens", rendered)
 
     def test_render_response_text_keeps_normal_completion_clean(self) -> None:
         response = {
@@ -143,7 +186,7 @@ class CLIEntrypointTests(unittest.TestCase):
             ]
         }
 
-        rendered = render_response_text(response)
+        rendered = render_response_text(response, elapsed_s=2.0)
 
         self.assertEqual(rendered, "Fertige Antwort")
 

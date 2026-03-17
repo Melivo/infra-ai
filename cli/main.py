@@ -3,12 +3,15 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
+import time
 from urllib import error, request
 
 from cli.tool_selector import select_tools
 
 ROUTING_MODES = ("auto", "local", "reasoning", "heavy")
+THINK_BLOCK_RE = re.compile(r"^\s*<think>(.*?)</think>\s*(.*)\Z", re.DOTALL)
 
 
 def build_payload(
@@ -167,6 +170,16 @@ def extract_text(response: dict[str, object]) -> str:
     return json.dumps(response, indent=2)
 
 
+def extract_visible_text(text: str) -> tuple[str | None, str]:
+    match = THINK_BLOCK_RE.match(text)
+    if match is None:
+        return None, text
+
+    thought = match.group(1).strip()
+    visible = match.group(2).strip()
+    return thought, visible
+
+
 def extract_finish_reason(response: dict[str, object]) -> str | None:
     choices = response.get("choices")
     if not isinstance(choices, list) or not choices:
@@ -183,13 +196,27 @@ def extract_finish_reason(response: dict[str, object]) -> str | None:
     return None
 
 
-def render_response_text(response: dict[str, object]) -> str:
+def render_response_text(
+    response: dict[str, object],
+    *,
+    show_thoughts: bool = False,
+    elapsed_s: float | None = None,
+) -> str:
     text = extract_text(response)
+    thought, visible = extract_visible_text(text)
+
+    if show_thoughts or thought is None:
+        rendered = text
+    else:
+        duration_s = 0 if elapsed_s is None else max(0, round(elapsed_s))
+        summary = f"Thought for {duration_s}s > hidden; rerun with --show-thoughts to view."
+        rendered = summary if not visible else f"{summary}\n\n{visible}"
+
     if extract_finish_reason(response) != "length":
-        return text
+        return rendered
 
     notice = "[output truncated at max_tokens; rerun with a higher --max-tokens value if you need more.]"
-    return f"{text}\n\n{notice}"
+    return f"{rendered}\n\n{notice}"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -250,6 +277,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--raw",
         action="store_true",
         help="Print raw JSON, or raw event-stream lines when combined with --stream.",
+    )
+    parser.add_argument(
+        "--show-thoughts",
+        action="store_true",
+        help="Show raw <think> blocks instead of hiding them behind a compact summary line.",
     )
     parser.add_argument(
         "--interactive",
@@ -316,17 +348,19 @@ def _run_request(
         )
         return
 
+    started_at = time.monotonic()
     response = request_chat(
         base_url=args.router_url,
         payload=payload,
         timeout_s=args.timeout,
     )
+    elapsed_s = time.monotonic() - started_at
 
     if args.raw:
         print(json.dumps(response, indent=2))
         return
 
-    print(render_response_text(response))
+    print(render_response_text(response, show_thoughts=args.show_thoughts, elapsed_s=elapsed_s))
 
 
 def run_interactive(args: argparse.Namespace) -> None:

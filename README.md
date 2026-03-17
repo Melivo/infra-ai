@@ -389,6 +389,8 @@ Die CLI spricht standardmaessig mit `http://127.0.0.1:8010/v1`, sendet `model=au
 
 Fuer laengere lokale Antworten nutzt die CLI standardmaessig `--max-tokens 3072`. Das ist als grober Standard fuer mehrseitige Prosa gedacht. Wenn die Router-Antwort trotzdem mit `finish_reason=length` endet, markiert die CLI die Ausgabe explizit als abgeschnitten und verweist auf `--max-tokens`.
 
+Wenn das Modell `<think>...</think>`-Inhalte direkt im Antworttext liefert, verbirgt die CLI diese standardmaessig hinter einer kompakten `Thought for XXs >`-Zeile und zeigt nur die sichtbare Antwort. Mit `--show-thoughts` kannst du den unveraenderten Antworttext inklusive Thinking ausgeben lassen. `--raw` bleibt unveraendert der Escape-Hatch fuer die volle JSON-Antwort.
+
 Aktuelle Streaming-Grenze:
 
 - `--stream` ist fuer `local` und damit auch fuer `auto` gedacht, weil `auto` derzeit deterministisch lokal aufloest.
