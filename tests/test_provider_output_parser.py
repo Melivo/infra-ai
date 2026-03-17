@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import unittest
 
-from router.conversation import ExecutionDependencyOrigin, ExecutionNodeStatus, StepPhase, turns_to_generation
+from router.conversation import (
+    DeclaredPlanNodeSpec,
+    DeclaredPlanSpec,
+    ExecutionDependencyOrigin,
+    ExecutionNodeStatus,
+    StepPhase,
+    turns_to_generation,
+)
 from router.provider_output import ProviderOutput, parse_provider_generation, parse_provider_step
 from router.providers.base import ProviderError
 
@@ -74,6 +81,7 @@ class ProviderOutputParserTests(unittest.TestCase):
         self.assertEqual(parsed.step.plan.nodes[0].status, ExecutionNodeStatus.PLANNED)
         self.assertEqual(parsed.step.plan.nodes[0].declared_dependency_call_ids, [])
         self.assertEqual(parsed.step.plan.nodes[0].strategy_dependency_call_ids, [])
+        self.assertEqual(parsed.declared_plan.nodes[0].depends_on_call_ids, [])
         self.assertEqual(turns[1].tool_name, "add_numbers")
         self.assertEqual(turns[1].tool_arguments, {"a": 2, "b": 3})
 
@@ -220,6 +228,7 @@ class ProviderOutputParserTests(unittest.TestCase):
                 ExecutionDependencyOrigin.EXECUTION_STRATEGY,
             ],
         )
+        self.assertEqual(parsed.declared_plan.nodes[1].depends_on_call_ids, ["call-1"])
 
     def test_parse_openai_chat_unknown_declared_dependency_raises_provider_error(self) -> None:
         with self.assertRaises(ProviderError) as exc_info:
@@ -291,6 +300,47 @@ class ProviderOutputParserTests(unittest.TestCase):
                 ExecutionDependencyOrigin.DECLARED,
                 ExecutionDependencyOrigin.EXECUTION_STRATEGY,
             ],
+        )
+        self.assertEqual(parsed.declared_plan.nodes[1].depends_on_call_ids, ["call-1"])
+
+    def test_parse_openai_responses_exposes_declared_plan_spec(self) -> None:
+        parsed = parse_provider_step(
+            ProviderOutput(
+                format="openai_responses",
+                body={
+                    "id": "resp-2",
+                    "model": "gpt-5.2",
+                    "status": "in_progress",
+                    "output": [
+                        {
+                            "type": "function_call",
+                            "call_id": "call-1",
+                            "name": "echo",
+                            "arguments": "{\"message\": \"hi\"}",
+                        },
+                        {
+                            "type": "function_call",
+                            "call_id": "call-2",
+                            "name": "add_numbers",
+                            "arguments": "{\"a\": 2, \"b\": 3}",
+                            "depends_on_call_ids": ["call-1"],
+                        },
+                    ],
+                },
+                provider_name="openai_responses",
+                provider_slot="openai_reasoning",
+                fallback_model="gpt-5.2",
+            )
+        )
+
+        self.assertEqual(
+            parsed.declared_plan,
+            DeclaredPlanSpec(
+                nodes=[
+                    DeclaredPlanNodeSpec(tool_call_id="call-1"),
+                    DeclaredPlanNodeSpec(tool_call_id="call-2", depends_on_call_ids=["call-1"]),
+                ]
+            ),
         )
 
     def test_parse_openai_responses_unknown_declared_dependency_raises_provider_error(self) -> None:

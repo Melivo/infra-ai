@@ -6,6 +6,7 @@ from router.conversation import (
     AssistantTurn,
     ConversationTurn,
     DECLARED_DEPENDENCY_METADATA_KEY,
+    DeclaredPlanSpec,
     ExecutionStep,
     ExecutionPlanValidationError,
     FinalTurn,
@@ -66,7 +67,7 @@ def _parse_openai_chat_completion(provider_response: ProviderOutput) -> ParsedPr
     if not isinstance(message_payload, dict):
         raise invalid_model_tool_call("OpenAI-compatible provider returned a choice without a message.")
 
-    tool_call_turns = _extract_openai_tool_call_turns(message_payload.get("tool_calls"))
+    tool_call_turns, declared_plan = _extract_openai_tool_call_turns(message_payload.get("tool_calls"))
     content = _extract_openai_message_content(message_payload.get("content"))
     metadata = _generation_metadata(
         finish_reason=_string_value(first_choice.get("finish_reason")),
@@ -76,7 +77,12 @@ def _parse_openai_chat_completion(provider_response: ProviderOutput) -> ParsedPr
         provider_slot=provider_response.provider_slot,
         usage=body.get("usage") if isinstance(body.get("usage"), dict) else None,
     )
-    return _assistant_step(content=content, metadata=metadata, tool_call_turns=tool_call_turns)
+    return _assistant_step(
+        content=content,
+        metadata=metadata,
+        tool_call_turns=tool_call_turns,
+        declared_plan=declared_plan,
+    )
 
 
 def _parse_openai_responses(provider_response: ProviderOutput) -> ParsedProviderStep:
@@ -93,7 +99,7 @@ def _parse_openai_responses(provider_response: ProviderOutput) -> ParsedProvider
         )
 
     output_text = body.get("output_text")
-    tool_call_turns = _extract_openai_responses_tool_call_turns(body.get("output"))
+    tool_call_turns, declared_plan = _extract_openai_responses_tool_call_turns(body.get("output"))
     message_text = output_text if isinstance(output_text, str) else _extract_openai_responses_output_text(body.get("output"))
     usage = body.get("usage")
     usage_payload: dict[str, JSONValue] | None = None
@@ -111,7 +117,12 @@ def _parse_openai_responses(provider_response: ProviderOutput) -> ParsedProvider
         provider_slot=provider_response.provider_slot,
         usage=usage_payload,
     )
-    return _assistant_step(content=message_text, metadata=metadata, tool_call_turns=tool_call_turns)
+    return _assistant_step(
+        content=message_text,
+        metadata=metadata,
+        tool_call_turns=tool_call_turns,
+        declared_plan=declared_plan,
+    )
 
 
 def _parse_gemini_generate_content(provider_response: ProviderOutput) -> ParsedProviderStep:
@@ -176,6 +187,7 @@ def _assistant_step(
     content: str,
     metadata: dict[str, JSONValue],
     tool_call_turns: list[ConversationTurn],
+    declared_plan: DeclaredPlanSpec,
 ) -> ParsedProviderStep:
     phase = StepPhase.TOOL_PLAN if tool_call_turns else StepPhase.FINALIZATION
     assistant_turn = AssistantTurn(
@@ -190,6 +202,7 @@ def _assistant_step(
                 for turn in tool_call_turns
                 if isinstance(turn, ToolCallTurn)
             ],
+            declared_plan=declared_plan,
         )
     except ExecutionPlanValidationError as exc:
         raise invalid_model_tool_call(str(exc)) from exc
@@ -216,11 +229,16 @@ def _assistant_step(
             plan=plan,
             final=final_turn,
         )
-    return ParsedProviderStep(turns=turns, step=step)
+    return ParsedProviderStep(turns=turns, declared_plan=declared_plan, step=step)
 
 
 def _assistant_final_step(*, content: str, metadata: dict[str, JSONValue]) -> ParsedProviderStep:
-    return _assistant_step(content=content, metadata=metadata, tool_call_turns=[])
+    return _assistant_step(
+        content=content,
+        metadata=metadata,
+        tool_call_turns=[],
+        declared_plan=DeclaredPlanSpec(),
+    )
 
 
 def _extract_openai_message_content(content: JSONValue) -> str:
@@ -242,13 +260,16 @@ def _extract_openai_message_content(content: JSONValue) -> str:
     return ""
 
 
-def _extract_openai_tool_call_turns(tool_calls_payload: JSONValue) -> list[ConversationTurn]:
+def _extract_openai_tool_call_turns(
+    tool_calls_payload: JSONValue,
+) -> tuple[list[ConversationTurn], DeclaredPlanSpec]:
     if tool_calls_payload is None:
-        return []
+        return [], DeclaredPlanSpec()
     if not isinstance(tool_calls_payload, list):
         raise invalid_model_tool_call("OpenAI-compatible provider returned a non-list tool_calls payload.")
 
     turns: list[ConversationTurn] = []
+    declared_plan = DeclaredPlanSpec()
     for item in tool_calls_payload:
         if not isinstance(item, dict):
             raise invalid_model_tool_call("OpenAI-compatible provider returned an invalid tool_calls entry.")
@@ -262,25 +283,31 @@ def _extract_openai_tool_call_turns(tool_calls_payload: JSONValue) -> list[Conve
             malformed_message="OpenAI-compatible provider returned a malformed tool call envelope.",
             missing_name_message="OpenAI-compatible provider returned a tool call without a name.",
         )
+        declared_dependency_call_ids = _declared_dependency_call_ids_from_payload(
+            item,
+            malformed_message="OpenAI-compatible provider returned a malformed tool call envelope.",
+        )
         turns.append(
             ToolCallTurn(
                 tool_name=name,
                 tool_call_id=call_id,
                 tool_arguments=arguments,
-                declared_dependency_call_ids=_declared_dependency_call_ids_from_payload(
-                    item,
-                    malformed_message="OpenAI-compatible provider returned a malformed tool call envelope.",
-                ),
+                declared_dependency_call_ids=declared_dependency_call_ids,
             )
         )
-    return turns
+        declared_plan = declared_plan.append_node(
+            tool_call_id=call_id,
+            depends_on_call_ids=declared_dependency_call_ids,
+        )
+    return turns, declared_plan
 
 
-def _extract_openai_responses_tool_call_turns(output: JSONValue) -> list[ConversationTurn]:
+def _extract_openai_responses_tool_call_turns(output: JSONValue) -> tuple[list[ConversationTurn], DeclaredPlanSpec]:
     if not isinstance(output, list):
-        return []
+        return [], DeclaredPlanSpec()
 
     tool_call_turns: list[ConversationTurn] = []
+    declared_plan = DeclaredPlanSpec()
     for item in output:
         if not isinstance(item, dict):
             continue
@@ -292,18 +319,23 @@ def _extract_openai_responses_tool_call_turns(output: JSONValue) -> list[Convers
             arguments_raw=item.get("arguments"),
             malformed_message="OpenAI Responses returned a malformed function call.",
         )
+        declared_dependency_call_ids = _declared_dependency_call_ids_from_payload(
+            item,
+            malformed_message="OpenAI Responses returned a malformed function call.",
+        )
         tool_call_turns.append(
             ToolCallTurn(
                 tool_name=name,
                 tool_call_id=call_id,
                 tool_arguments=arguments,
-                declared_dependency_call_ids=_declared_dependency_call_ids_from_payload(
-                    item,
-                    malformed_message="OpenAI Responses returned a malformed function call.",
-                ),
+                declared_dependency_call_ids=declared_dependency_call_ids,
             )
         )
-    return tool_call_turns
+        declared_plan = declared_plan.append_node(
+            tool_call_id=call_id,
+            depends_on_call_ids=declared_dependency_call_ids,
+        )
+    return tool_call_turns, declared_plan
 
 
 def _declared_dependency_call_ids_from_payload(

@@ -13,6 +13,8 @@ from router.conversation import (
     ExecutionStep,
     StepPhase,
     ToolCallTurn,
+    DeclaredPlanNodeSpec,
+    DeclaredPlanSpec,
 )
 from router.normalization import GenerationRequest
 from router.provider_output import ParsedProviderStep, ProviderOutput
@@ -77,6 +79,14 @@ class ToolLoopTests(unittest.TestCase):
             step=ExecutionStep(
                 planning_turns=[AssistantTurn(content="plan", phase=StepPhase.TOOL_PLAN)],
                 plan=ExecutionPlan(
+                    declared_plan=DeclaredPlanSpec(
+                        nodes=[
+                            DeclaredPlanNodeSpec(
+                                tool_call_id="call-1",
+                                depends_on_call_ids=["missing-call"],
+                            )
+                        ]
+                    ),
                     nodes=[
                         ExecutionPlanNode(
                             tool_call=ToolCallTurn(
@@ -134,6 +144,15 @@ class ToolLoopTests(unittest.TestCase):
             step=ExecutionStep(
                 planning_turns=[planning_turn],
                 plan=ExecutionPlan(
+                    declared_plan=DeclaredPlanSpec(
+                        nodes=[
+                            DeclaredPlanNodeSpec(tool_call_id="call-1"),
+                            DeclaredPlanNodeSpec(
+                                tool_call_id="call-2",
+                                depends_on_call_ids=["missing-call"],
+                            ),
+                        ]
+                    ),
                     nodes=[
                         ExecutionPlanNode(
                             tool_call=ToolCallTurn(

@@ -5,6 +5,8 @@ import unittest
 from router.conversation import (
     AssistantTurn,
     DECLARED_DEPENDENCY_METADATA_KEY,
+    DeclaredPlanNodeSpec,
+    DeclaredPlanSpec,
     ExecutionDependency,
     ExecutionDependencyOrigin,
     ExecutionNodeStatus,
@@ -164,6 +166,7 @@ class ConversationTurnsTests(unittest.TestCase):
         self.assertEqual(steps[-1].plan.nodes[1].strategy_dependency_call_ids, ["call-1"])
         self.assertEqual(steps[-1].plan.nodes[1].depends_on_call_ids, ["call-1"])
         self.assertEqual(steps[-1].plan.nodes[1].dependencies[0].origin, ExecutionDependencyOrigin.EXECUTION_STRATEGY)
+        self.assertEqual(steps[-1].plan.declared_plan.nodes[1].depends_on_call_ids, [])
         self.assertEqual(generation.message.content, "calling tools")
         self.assertEqual([tool_call.name for tool_call in generation.message.tool_calls], ["echo", "add_numbers"])
 
@@ -199,6 +202,31 @@ class ConversationTurnsTests(unittest.TestCase):
         self.assertEqual(plan.nodes[1].declared_dependency_call_ids, [])
         self.assertEqual(plan.nodes[1].strategy_dependency_call_ids, ["call-1"])
         self.assertEqual(plan.nodes[1].depends_on_call_ids, ["call-1"])
+        self.assertEqual([node.depends_on_call_ids for node in plan.declared_plan.nodes], [[], []])
+
+    def test_build_execution_plan_prefers_explicit_declared_plan_spec_over_turn_field(self) -> None:
+        declared_plan = DeclaredPlanSpec(
+            nodes=[
+                DeclaredPlanNodeSpec(tool_call_id="call-1"),
+                DeclaredPlanNodeSpec(tool_call_id="call-2", depends_on_call_ids=["call-1"]),
+            ]
+        )
+        plan = build_execution_plan(
+            [
+                ToolCallTurn(tool_name="echo", tool_call_id="call-1", tool_arguments={"message": "hi"}),
+                ToolCallTurn(
+                    tool_name="add_numbers",
+                    tool_call_id="call-2",
+                    tool_arguments={"a": 2, "b": 3},
+                    declared_dependency_call_ids=["wrong-call"],
+                ),
+            ],
+            declared_plan=declared_plan,
+        )
+
+        self.assertEqual(plan.declared_plan.nodes[1].depends_on_call_ids, ["call-1"])
+        self.assertEqual(plan.nodes[1].declared_dependency_call_ids, ["call-1"])
+        self.assertEqual(plan.nodes[1].strategy_dependency_call_ids, ["call-1"])
 
     def test_build_execution_plan_uses_tool_call_metadata_for_declared_dependencies(self) -> None:
         plan = build_execution_plan(
@@ -222,6 +250,7 @@ class ConversationTurnsTests(unittest.TestCase):
                 ExecutionDependencyOrigin.EXECUTION_STRATEGY,
             ],
         )
+        self.assertEqual(plan.declared_plan.nodes[1].depends_on_call_ids, ["call-1"])
 
     def test_append_declared_plan_node_rejects_unknown_declared_dependency(self) -> None:
         with self.assertRaises(ExecutionPlanValidationError):
@@ -372,6 +401,8 @@ class ConversationTurnsTests(unittest.TestCase):
         self.assertEqual(updated.plan.nodes[0].status, ExecutionNodeStatus.COMPLETED)
         self.assertEqual(updated.plan.nodes[0].result.content_json, {"message": "hi"})
         self.assertEqual(updated.plan.nodes[1].status, ExecutionNodeStatus.PLANNED)
+        self.assertEqual(updated.plan.declared_plan.nodes[0].depends_on_call_ids, [])
+        self.assertEqual(updated.plan.declared_plan.nodes[1].depends_on_call_ids, [])
 
     def test_mark_plan_node_completed_only_mutates_execution_progress(self) -> None:
         plan = build_execution_plan(
@@ -391,6 +422,7 @@ class ConversationTurnsTests(unittest.TestCase):
         self.assertEqual(updated_plan.nodes[0].strategy_dependency_call_ids, [])
         self.assertEqual(updated_plan.nodes[1].status, ExecutionNodeStatus.PLANNED)
         self.assertEqual(updated_plan.nodes[1].strategy_dependency_call_ids, ["call-1"])
+        self.assertEqual(updated_plan.declared_plan.nodes[1].depends_on_call_ids, [])
 
     def test_next_executable_plan_nodes_follow_dependency_and_node_state(self) -> None:
         plan = build_execution_plan(
