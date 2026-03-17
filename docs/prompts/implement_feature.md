@@ -18,6 +18,7 @@ Implement the smallest safe change directly in code.
 This template is implementation-phase focused:
 
 - do not stop at planning,
+- if the smallest safe step is not already identified, stop and use `docs/prompts/plan_feature.md` first,
 - do not broaden the scope once the safe step is identified,
 - prefer explicit helpers over clever logic,
 - keep runtime behavior deterministic,
