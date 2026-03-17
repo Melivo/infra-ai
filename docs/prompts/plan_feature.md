@@ -27,6 +27,7 @@ Produce a plan that:
 3. Identify the architectural invariants that constrain the change.
 4. Name the smallest acceptable design step.
 5. Separate clearly:
+   - declaration-spec state
    - declared structure
    - strategy-derived constraints
    - execution progress
@@ -58,6 +59,7 @@ Before finalizing the plan, answer these:
 - Does this keep `ConversationTurn` as the core representation?
 - Does orchestration still operate on `ExecutionStep` and `ExecutionPlan`?
 - Is plan truth explicit rather than reconstructed from turns?
+- Is declared structure represented as explicit plan/declaration state rather than only transport metadata on tool calls?
 - Is provider-specific logic confined to `router/provider_output/*`?
 - Does the tool loop remain provider-agnostic?
 - Are `Normalized*` models still boundary-only?

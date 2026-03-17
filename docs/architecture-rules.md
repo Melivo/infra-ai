@@ -26,6 +26,7 @@ All refactors and features must preserve them.
   - tool calls
   - dependencies
   - execution state
+- Declared plan structure must be represented as explicit internal plan state and must not rely solely on transport metadata attached to tool-call turns.
 - Plan state must not be reconstructed ad hoc from turns during execution.
 - Sequential execution is a strategy, not the definition of the plan.
 

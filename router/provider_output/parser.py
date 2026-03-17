@@ -215,6 +215,7 @@ def _assistant_step(
         planning_turns=[assistant_turn] if tool_call_turns else [],
         refinement_turns=step.refinement_turns,
         finalization_turns=[] if tool_call_turns else [assistant_turn],
+        declared_plan=declared_plan,
         plan=plan,
         final=step.final,
     )
@@ -226,10 +227,11 @@ def _assistant_step(
         turns.append(final_turn)
         step = ExecutionStep(
             finalization_turns=[assistant_turn],
+            declared_plan=declared_plan,
             plan=plan,
             final=final_turn,
         )
-    return ParsedProviderStep(turns=turns, declared_plan=declared_plan, step=step)
+    return ParsedProviderStep(turns=turns, step=step)
 
 
 def _assistant_final_step(*, content: str, metadata: dict[str, JSONValue]) -> ParsedProviderStep:

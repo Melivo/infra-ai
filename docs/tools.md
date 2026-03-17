@@ -13,7 +13,9 @@ Chat Request
 -> Provider Adapter
 -> ProviderOutput
 -> Provider Output Parser
--> ConversationTurn
+-> ConversationTurn / ExecutionStep
+-> Declared Plan Spec
+-> ExecutionPlan
 -> ToolLoopEngine
 -> ToolOrchestrator
 -> ToolRegistry
@@ -62,17 +64,16 @@ V1 unterstuetzt bewusst noch nicht:
 `ConversationTurn` ist jetzt das primaere interne Modell im Router-Kern. Provider-Rohantworten werden an der Boundary in Turns geparst, und der Tool-Loop arbeitet providerunabhaengig nur noch auf diesen Turns.
 
 - spezialisierte Turn-Typen (`UserTurn`, `AssistantTurn`, `ToolCallTurn`, `ToolResultTurn`, `FinalTurn`) bilden die internen Rollen explizit statt ueber ein einzelnes ueberladenes Datamodell.
-- `ExecutionStep` ist die autoritative Orchestrierungseinheit pro Modellschritt. Sie haelt explizit Reasoning-, Planning-, Refinement- und Finalization-Turns sowie den aktuellen `ExecutionPlan`.
+- `ExecutionStep` ist die autoritative Orchestrierungseinheit pro Modellschritt. Sie haelt explizit Reasoning-, Planning-, Refinement- und Finalization-Turns, die deklarative Plan-Spezifikation (`declared_plan`) sowie den aktuellen `ExecutionPlan`.
 - `AssistantTurn.phase` unterscheidet explizit `reasoning`, `tool_plan`, `refinement` und `finalization`; diese Phase wird an der Provider-Boundary moeglichst direkt gesetzt statt spaeter global erraten.
 - `ExecutionPlan` haelt die geplanten Tool-Calls eines Steps als explizite Knotenliste mit Strategie, Abhaengigkeiten, Knotenstatus und Ergebnisbezug.
-- `ExecutionPlan` traegt zusaetzlich eine eigene deklarierte Struktur (`declared_plan`), damit die Planabsicht router-intern explizit und getrennt vom spaeteren Ausfuehrungsfortschritt lebt.
 - Jeder `ExecutionPlanNode` trennt jetzt zwischen deklarierter Planstruktur (`declared_dependencies`), zur Laufstrategie abgeleiteten Constraints (`strategy_dependencies`) und dem spaeter mutierten Fortschritt (`state`, `result`).
-- In V1 bleiben deklarierte Abhaengigkeiten eine eigene Planebene. Wenn ein Tool-Call explizite `depends_on_call_ids` mitbringt, werden diese beim Planaufbau validiert und als `declared_dependencies` materialisiert; die sequentielle Reihenfolge bleibt davon getrennt als `strategy_dependencies`.
+- In V1 bleiben deklarierte Abhaengigkeiten eine eigene Planebene. Wenn ein Tool-Call explizite `depends_on_call_ids` mitbringt, liest die Provider-Boundary diese weiterhin aus dem Payload und ueberfuehrt sie zuerst in die explizite Step-gebundene `declared_plan`-Spezifikation. Erst daraus wird der ausfuehrbare `ExecutionPlan` materialisiert; die sequentielle Reihenfolge bleibt davon getrennt als `strategy_dependencies`.
 - `NormalizedMessage`, `NormalizedToolCall` und `NormalizedGeneration` bleiben als Kompatibilitaets- und API-Schicht bestehen, z. B. fuer Provider-Request-Serialisierung und den stabilen HTTP-Response-Contract.
 - `GenerationRequest` haelt intern Turns und stellt Provider-Input explizit ueber `to_provider_messages()` bereit.
 - Fuer Tool-Result-Nachrichten ist `content_json` das interne Primaerformat; Provider-Adapter serialisieren strukturierte Inhalte erst an ihrer jeweiligen Grenze in Text.
 
-Mehrere Tool-Calls in einem Modellschritt werden weiterhin sequentiell gegen denselben geplanten Step ausgefuehrt. Das ist bewusst noch kein vollwertiger Tool-Graph-Executor, aber der Step enthaelt jetzt bereits einen expliziten `ExecutionPlan` mit getrennten Deklarations-, Strategie- und Fortschrittsebenen statt nur lose rekonstruierter Listen.
+Mehrere Tool-Calls in einem Modellschritt werden weiterhin sequentiell gegen denselben geplanten Step ausgefuehrt. Das ist bewusst noch kein vollwertiger Tool-Graph-Executor, aber der Step enthaelt jetzt sowohl eine explizite deklarative Plan-Spezifikation als auch den daraus materialisierten `ExecutionPlan`, jeweils getrennt von Strategie- und Fortschrittsebene.
 
 `execution_steps_from_turns()` bleibt als Kompatibilitaets- und Recovery-Pfad erhalten. Die primaere Orchestrierungsquelle ist aber nicht mehr das spaetere Erraten aus Transport-Turns, sondern der explizit erzeugte Step- und Plan-State aus dem Provider-Parser plus dessen Mutationen im Tool-Loop.
 

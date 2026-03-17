@@ -183,7 +183,6 @@ class DeclaredPlanSpec:
 @dataclass(frozen=True)
 class ExecutionPlan:
     strategy: ExecutionStrategy = ExecutionStrategy.SEQUENTIAL
-    declared_plan: DeclaredPlanSpec = field(default_factory=DeclaredPlanSpec)
     nodes: list[ExecutionPlanNode] = field(default_factory=list)
 
 
@@ -193,6 +192,7 @@ class ExecutionStep:
     planning_turns: list[AssistantTurn] = field(default_factory=list)
     refinement_turns: list[AssistantTurn] = field(default_factory=list)
     finalization_turns: list[AssistantTurn] = field(default_factory=list)
+    declared_plan: DeclaredPlanSpec = field(default_factory=DeclaredPlanSpec)
     plan: ExecutionPlan = field(default_factory=ExecutionPlan)
     final: FinalTurn | None = None
 
@@ -228,12 +228,8 @@ def create_execution_step() -> ExecutionStep:
 def create_declared_execution_plan(
     *,
     strategy: ExecutionStrategy = ExecutionStrategy.SEQUENTIAL,
-    declared_plan: DeclaredPlanSpec | None = None,
 ) -> ExecutionPlan:
-    return ExecutionPlan(
-        strategy=strategy,
-        declared_plan=declared_plan or DeclaredPlanSpec(),
-    )
+    return ExecutionPlan(strategy=strategy)
 
 
 def message_to_turns(message: NormalizedMessage) -> list[ConversationTurn]:
@@ -298,9 +294,22 @@ def tool_call_to_turn(tool_call: NormalizedToolCall) -> ToolCallTurn:
 def turn_to_tool_call(turn: ConversationTurn) -> NormalizedToolCall:
     if not isinstance(turn, ToolCallTurn):
         raise ValueError(f"Expected a tool_call turn, got {turn.type!r}")
+    return _tool_call_turn_to_normalized_tool_call(turn)
+
+
+def _tool_call_turn_to_normalized_tool_call(
+    turn: ToolCallTurn,
+    *,
+    declared_plan: DeclaredPlanSpec | None = None,
+) -> NormalizedToolCall:
     metadata = dict(turn.metadata)
-    if turn.declared_dependency_call_ids:
-        metadata[DECLARED_DEPENDENCY_METADATA_KEY] = list(turn.declared_dependency_call_ids)
+    declared_dependency_call_ids = (
+        declared_plan.depends_on_call_ids_for(turn.tool_call_id)
+        if declared_plan is not None
+        else declared_dependency_call_ids_for_tool_call(turn)
+    )
+    if declared_dependency_call_ids:
+        metadata[DECLARED_DEPENDENCY_METADATA_KEY] = list(declared_dependency_call_ids)
     return NormalizedToolCall(
         call_id=turn.tool_call_id,
         name=turn.tool_name,
@@ -340,12 +349,15 @@ def build_execution_plan(
     strategy: ExecutionStrategy = ExecutionStrategy.SEQUENTIAL,
     declared_plan: DeclaredPlanSpec | None = None,
 ) -> ExecutionPlan:
-    plan = create_declared_execution_plan(
-        strategy=strategy,
-        declared_plan=declared_plan or declared_plan_spec_from_tool_calls(tool_calls),
-    )
+    declared_plan_spec = declared_plan or declared_plan_spec_from_tool_calls(tool_calls)
+    _validate_declared_plan_spec_inputs(tool_calls, declared_plan_spec)
+    plan = create_declared_execution_plan(strategy=strategy)
     for tool_call in tool_calls:
-        plan = append_declared_plan_node(plan, tool_call)
+        plan = append_declared_plan_node(
+            plan,
+            tool_call,
+            depends_on_call_ids=declared_plan_spec.depends_on_call_ids_for(tool_call.tool_call_id),
+        )
     plan = derive_strategy_dependencies(plan)
     validate_execution_plan(plan)
     return plan
@@ -363,6 +375,30 @@ def declared_plan_spec_from_tool_calls(tool_calls: list[ToolCallTurn]) -> Declar
     return declared_plan
 
 
+def _validate_declared_dependency_call_ids_in_declared_plan_spec(
+    known_call_ids: list[str],
+    *,
+    tool_call_id: str,
+    declared_dependency_call_ids: list[str],
+) -> None:
+    seen_dependency_call_ids: set[str] = set()
+    known_call_id_set = set(known_call_ids)
+    for call_id in declared_dependency_call_ids:
+        if call_id in seen_dependency_call_ids:
+            raise ExecutionPlanValidationError(
+                f"Declared plan spec node {tool_call_id} contains duplicate declared dependency {call_id}"
+            )
+        seen_dependency_call_ids.add(call_id)
+        if call_id == tool_call_id:
+            raise ExecutionPlanValidationError(
+                f"Declared plan spec node {tool_call_id} cannot depend on itself"
+            )
+        if call_id not in known_call_id_set:
+            raise ExecutionPlanValidationError(
+                f"Declared plan spec node {tool_call_id} depends on unknown call id {call_id}"
+            )
+
+
 def append_declared_plan_node(
     plan: ExecutionPlan,
     tool_call: ToolCallTurn,
@@ -375,7 +411,6 @@ def append_declared_plan_node(
         )
 
     declared_dependency_call_ids = _resolve_declared_dependency_call_ids(
-        plan,
         tool_call,
         depends_on_call_ids=depends_on_call_ids,
     )
@@ -388,15 +423,8 @@ def append_declared_plan_node(
         ExecutionDependency(call_id=call_id, origin=ExecutionDependencyOrigin.DECLARED)
         for call_id in declared_dependency_call_ids
     ]
-    declared_plan = plan.declared_plan
-    if declared_plan.node_for(tool_call.tool_call_id) is None:
-        declared_plan = declared_plan.append_node(
-            tool_call_id=tool_call.tool_call_id,
-            depends_on_call_ids=declared_dependency_call_ids,
-        )
     return replace(
         plan,
-        declared_plan=declared_plan,
         nodes=[
             *plan.nodes,
             ExecutionPlanNode(
@@ -408,16 +436,12 @@ def append_declared_plan_node(
 
 
 def _resolve_declared_dependency_call_ids(
-    plan: ExecutionPlan,
     tool_call: ToolCallTurn,
     *,
     depends_on_call_ids: list[str] | None,
 ) -> list[str]:
     if depends_on_call_ids is not None:
         return normalize_declared_dependency_call_ids(depends_on_call_ids)
-    declared_plan_call_ids = plan.declared_plan.depends_on_call_ids_for(tool_call.tool_call_id)
-    if declared_plan_call_ids is not None:
-        return declared_plan_call_ids
     return normalize_declared_dependency_call_ids(tool_call.declared_dependency_call_ids)
 
 
@@ -466,7 +490,6 @@ def derive_strategy_dependencies(plan: ExecutionPlan) -> ExecutionPlan:
 
 
 def validate_execution_plan(plan: ExecutionPlan) -> None:
-    _validate_declared_plan_alignment(plan)
     known_call_ids: list[str] = []
     for node in plan.nodes:
         call_id = node.tool_call.tool_call_id
@@ -498,21 +521,27 @@ def validate_execution_plan(plan: ExecutionPlan) -> None:
     _validate_execution_plan_dependency_cycles(plan)
 
 
-def _validate_declared_plan_alignment(plan: ExecutionPlan) -> None:
-    if len(plan.declared_plan.nodes) != len(plan.nodes):
+def _validate_declared_plan_spec_inputs(
+    tool_calls: list[ToolCallTurn],
+    declared_plan: DeclaredPlanSpec,
+) -> None:
+    if len(declared_plan.nodes) != len(tool_calls):
         raise ExecutionPlanValidationError(
-            "Execution plan declared structure is out of sync with node state."
+            "Declared plan spec must match tool call ids in order."
         )
 
-    for declared_node, node in zip(plan.declared_plan.nodes, plan.nodes, strict=True):
-        if declared_node.tool_call_id != node.tool_call.tool_call_id:
+    known_call_ids: list[str] = []
+    for declared_node, tool_call in zip(declared_plan.nodes, tool_calls, strict=True):
+        if declared_node.tool_call_id != tool_call.tool_call_id:
             raise ExecutionPlanValidationError(
-                "Execution plan declared structure is out of sync with node state."
+                "Declared plan spec must match tool call ids in order."
             )
-        if declared_node.depends_on_call_ids != node.declared_dependency_call_ids:
-            raise ExecutionPlanValidationError(
-                f"Execution plan node {node.tool_call.tool_call_id} does not match its declared dependency spec."
-            )
+        _validate_declared_dependency_call_ids_in_declared_plan_spec(
+            known_call_ids,
+            tool_call_id=declared_node.tool_call_id,
+            declared_dependency_call_ids=declared_node.depends_on_call_ids,
+        )
+        known_call_ids.append(declared_node.tool_call_id)
 
 
 def apply_tool_result_to_plan(plan: ExecutionPlan, result: ToolResultTurn) -> ExecutionPlan:
@@ -615,10 +644,7 @@ def execution_steps_from_turns(turns: list[ConversationTurn]) -> list[ExecutionS
         if current_step is None:
             continue
         if isinstance(turn, ToolCallTurn):
-            current_step = replace(
-                current_step,
-                plan=_append_tool_call_to_plan(current_step.plan, turn),
-            )
+            current_step = _append_tool_call_to_step(current_step, turn)
             steps[-1] = current_step
             continue
         if isinstance(turn, ToolResultTurn):
@@ -652,7 +678,13 @@ def turns_to_generation(turns: list[ConversationTurn]) -> NormalizedGeneration:
             role="assistant",
             content=assistant_turn.content,
             content_json=assistant_turn.content_json,
-            tool_calls=[turn_to_tool_call(turn) for turn in step.tool_calls],
+            tool_calls=[
+                _tool_call_turn_to_normalized_tool_call(
+                    turn,
+                    declared_plan=step.declared_plan,
+                )
+                for turn in step.tool_calls
+            ],
             metadata=dict(assistant_turn.metadata),
         ),
         final=step.final is not None,
@@ -787,8 +819,37 @@ def _append_assistant_turn(step: ExecutionStep, turn: AssistantTurn) -> Executio
     return replace(step, reasoning_turns=[*step.reasoning_turns, turn])
 
 
-def _append_tool_call_to_plan(plan: ExecutionPlan, tool_call: ToolCallTurn) -> ExecutionPlan:
-    updated_plan = append_declared_plan_node(plan, tool_call)
+def _append_tool_call_to_step(step: ExecutionStep, tool_call: ToolCallTurn) -> ExecutionStep:
+    updated_declared_plan = step.declared_plan.append_node(
+        tool_call_id=tool_call.tool_call_id,
+        depends_on_call_ids=declared_dependency_call_ids_for_tool_call(tool_call),
+    )
+    updated_plan = _append_tool_call_to_plan(
+        step.plan,
+        tool_call,
+        declared_plan=updated_declared_plan,
+    )
+    return replace(
+        step,
+        declared_plan=updated_declared_plan,
+        plan=updated_plan,
+    )
+
+
+def _append_tool_call_to_plan(
+    plan: ExecutionPlan,
+    tool_call: ToolCallTurn,
+    *,
+    declared_plan: DeclaredPlanSpec | None = None,
+) -> ExecutionPlan:
+    depends_on_call_ids = None
+    if declared_plan is not None:
+        depends_on_call_ids = declared_plan.depends_on_call_ids_for(tool_call.tool_call_id)
+    updated_plan = append_declared_plan_node(
+        plan,
+        tool_call,
+        depends_on_call_ids=depends_on_call_ids,
+    )
     updated_plan = derive_strategy_dependencies(updated_plan)
     validate_execution_plan(updated_plan)
     return updated_plan

@@ -42,6 +42,7 @@ The router controls:
 - routing modes and policies
 - provider selection
 - provider response normalization into turn and execution-step state
+- explicit plan-declaration state before execution-plan materialization
 - tool-loop orchestration against explicit declared-plan, strategy and progress state
 - sequential plan execution with explicit dependency-carrying plan nodes
 - provider error normalization
@@ -56,6 +57,7 @@ Within the router, the orchestration direction is intentionally:
 ```text
 provider output
   -> explicit execution step state
+  -> explicit plan declaration state
   -> explicit execution plan state
   -> execution progression
   -> turns / history compatibility views

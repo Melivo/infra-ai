@@ -28,6 +28,7 @@ Explicitly check:
 
 - no provider-specific logic in router core,
 - no ad hoc plan reconstruction during execution,
+- no fake explicitness where declared structure still only lives on tool-call transport metadata,
 - no reintroduction of `NormalizedMessage` or `NormalizedGeneration` as core models,
 - no bypass of `ExecutionStep` or `ExecutionPlan`,
 - no stringly-typed parsing inside the core where structured data should be used,

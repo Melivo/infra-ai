@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from router.conversation import ConversationTurn, DeclaredPlanSpec, ExecutionStep
+from router.conversation import ConversationTurn, ExecutionStep
 from router.schemas import JSONValue
 
 
@@ -22,4 +22,3 @@ class ProviderOutput:
 class ParsedProviderStep:
     turns: list[ConversationTurn]
     step: ExecutionStep
-    declared_plan: DeclaredPlanSpec = field(default_factory=DeclaredPlanSpec)

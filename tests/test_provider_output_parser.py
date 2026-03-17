@@ -81,7 +81,7 @@ class ProviderOutputParserTests(unittest.TestCase):
         self.assertEqual(parsed.step.plan.nodes[0].status, ExecutionNodeStatus.PLANNED)
         self.assertEqual(parsed.step.plan.nodes[0].declared_dependency_call_ids, [])
         self.assertEqual(parsed.step.plan.nodes[0].strategy_dependency_call_ids, [])
-        self.assertEqual(parsed.declared_plan.nodes[0].depends_on_call_ids, [])
+        self.assertEqual(parsed.step.declared_plan.nodes[0].depends_on_call_ids, [])
         self.assertEqual(turns[1].tool_name, "add_numbers")
         self.assertEqual(turns[1].tool_arguments, {"a": 2, "b": 3})
 
@@ -228,7 +228,7 @@ class ProviderOutputParserTests(unittest.TestCase):
                 ExecutionDependencyOrigin.EXECUTION_STRATEGY,
             ],
         )
-        self.assertEqual(parsed.declared_plan.nodes[1].depends_on_call_ids, ["call-1"])
+        self.assertEqual(parsed.step.declared_plan.nodes[1].depends_on_call_ids, ["call-1"])
 
     def test_parse_openai_chat_unknown_declared_dependency_raises_provider_error(self) -> None:
         with self.assertRaises(ProviderError) as exc_info:
@@ -301,7 +301,7 @@ class ProviderOutputParserTests(unittest.TestCase):
                 ExecutionDependencyOrigin.EXECUTION_STRATEGY,
             ],
         )
-        self.assertEqual(parsed.declared_plan.nodes[1].depends_on_call_ids, ["call-1"])
+        self.assertEqual(parsed.step.declared_plan.nodes[1].depends_on_call_ids, ["call-1"])
 
     def test_parse_openai_responses_exposes_declared_plan_spec(self) -> None:
         parsed = parse_provider_step(
@@ -334,7 +334,7 @@ class ProviderOutputParserTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            parsed.declared_plan,
+            parsed.step.declared_plan,
             DeclaredPlanSpec(
                 nodes=[
                     DeclaredPlanNodeSpec(tool_call_id="call-1"),

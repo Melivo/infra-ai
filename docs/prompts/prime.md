@@ -28,6 +28,7 @@ You must preserve all of these:
 - `ConversationTurn` is the primary internal representation.
 - `ExecutionStep` is the orchestration unit.
 - `ExecutionPlan` is first-class state.
+- Declared plan structure must be explicit internal plan/declaration state, not only metadata carried on tool calls.
 - Plan state must not be reconstructed ad hoc from turns during execution.
 - Provider-specific parsing only happens in `router/provider_output/*`.
 - `ToolLoopEngine` must remain provider-agnostic.
