@@ -30,6 +30,9 @@ services:
       - --gpu-memory-utilization
       - "${VLLM_GPU_MEMORY_UTILIZATION:-0.85}"
       - --enforce-eager
+      - --enable-auto-tool-choice
+      - --tool-call-parser
+      - hermes
       - --max-model-len
       - "4096"
       - --trust-remote-code

@@ -118,7 +118,7 @@ bash scripts/start.sh
 bash scripts/stop.sh
 ```
 
-`scripts/start.sh` startet `vLLM`, startet oder verwendet den Router auf `http://127.0.0.1:8010/v1`, wartet auf `GET /healthz` und wechselt auf einem interaktiven Terminal danach direkt ins `infra-ai` CLI. `vLLM` bleibt dabei der separate lokale Provider auf Port `8000`.
+`scripts/start.sh` startet `vLLM`, startet oder verwendet den Router auf `http://127.0.0.1:8010/v1`, wartet auf die lokale `vLLM`-Readiness ueber den OpenAI-kompatiblen Models-Endpunkt und danach auf `GET /healthz`, bevor es auf einem interaktiven Terminal direkt ins `infra-ai` CLI wechselt. Der lokale `vLLM`-Startpfad setzt dabei auch die noetigen Tool-Choice-Flags fuer den Router-Tool-Loop. `vLLM` bleibt dabei der separate lokale Provider auf Port `8000`.
 Falls du nur den Stack ohne CLI starten willst, nutze `bash scripts/start.sh --no-cli`.
 Der Router schreibt dabei nach `~/.ai/logs/router.log`.
 `scripts/start.sh` setzt eine vorbereitete Python-Umgebung voraus und installiert nichts. Wenn `.venv` fehlt, der Requirements-Stamp fehlt oder `requirements.txt` neuer als der Stamp ist, bricht das Skript mit einem klaren Hinweis auf `bash scripts/bootstrap.sh` ab.
@@ -371,7 +371,7 @@ python3 -m cli
 
 `infra-ai` CLI laedt verfuegbare Tools ueber `GET /v1/router/capabilities` und bietet beim Start eine kleine Terminal-Auswahl an.
 
-Die Auswahl wird als `allowed_tools` an den Router gesendet. Die eigentliche Tool-Freigabe und Tool-Kontrolle bleibt im Router. Eine spaetere klickbare oder reichere Tool-UI gehoert in ein Frontend wie eine TUI, nicht in den Router selbst.
+Die Auswahl wird als `allowed_tools` an den Router gesendet. Eine leere Auswahl bleibt explizit leer; ausgewaehlte Tools sollen im lokalen `vLLM`-Pfad direkt nutzbar sein. Die eigentliche Tool-Freigabe und Tool-Kontrolle bleibt im Router. Eine spaetere klickbare oder reichere Tool-UI gehoert in ein Frontend wie eine TUI, nicht in den Router selbst.
 
 Optional mit stdin:
 
