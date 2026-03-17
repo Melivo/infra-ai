@@ -32,8 +32,10 @@ from router.conversation import (
     mark_plan_node_completed,
     messages_to_turns,
     next_executable_plan_nodes,
+    materialize_execution_plan_from_declared_plan_spec,
     turns_to_generation,
     turns_to_messages,
+    validate_declared_plan_spec,
     validate_execution_plan,
 )
 from router.normalization import GenerationRequest, NormalizedGeneration, NormalizedMessage, NormalizedToolCall
@@ -204,14 +206,15 @@ class ConversationTurnsTests(unittest.TestCase):
         self.assertEqual(plan.nodes[1].strategy_dependency_call_ids, ["call-1"])
         self.assertEqual(plan.nodes[1].depends_on_call_ids, ["call-1"])
 
-    def test_build_execution_plan_prefers_explicit_declared_plan_spec_over_turn_field(self) -> None:
+    def test_materialize_execution_plan_from_declared_plan_spec_prefers_spec_over_turn_field(self) -> None:
         declared_plan = DeclaredPlanSpec(
             nodes=[
                 DeclaredPlanNodeSpec(tool_call_id="call-1"),
                 DeclaredPlanNodeSpec(tool_call_id="call-2", depends_on_call_ids=["call-1"]),
             ]
         )
-        plan = build_execution_plan(
+        plan = materialize_execution_plan_from_declared_plan_spec(
+            declared_plan,
             [
                 ToolCallTurn(tool_name="echo", tool_call_id="call-1", tool_arguments={"message": "hi"}),
                 ToolCallTurn(
@@ -221,11 +224,46 @@ class ConversationTurnsTests(unittest.TestCase):
                     declared_dependency_call_ids=["wrong-call"],
                 ),
             ],
-            declared_plan=declared_plan,
         )
 
         self.assertEqual(plan.nodes[1].declared_dependency_call_ids, ["call-1"])
         self.assertEqual(plan.nodes[1].strategy_dependency_call_ids, ["call-1"])
+
+    def test_validate_declared_plan_spec_rejects_direct_construction_cycle(self) -> None:
+        declared_plan = DeclaredPlanSpec(
+            nodes=[
+                DeclaredPlanNodeSpec(tool_call_id="call-1", depends_on_call_ids=["call-2"]),
+                DeclaredPlanNodeSpec(tool_call_id="call-2", depends_on_call_ids=["call-1"]),
+            ]
+        )
+
+        with self.assertRaises(ExecutionPlanValidationError):
+            validate_declared_plan_spec(declared_plan)
+
+    def test_materialize_execution_plan_from_declared_plan_spec_rejects_reordered_tool_calls(self) -> None:
+        declared_plan = DeclaredPlanSpec(
+            nodes=[
+                DeclaredPlanNodeSpec(tool_call_id="call-1"),
+                DeclaredPlanNodeSpec(tool_call_id="call-2"),
+            ]
+        )
+
+        with self.assertRaises(ExecutionPlanValidationError):
+            materialize_execution_plan_from_declared_plan_spec(
+                declared_plan,
+                [
+                    ToolCallTurn(
+                        tool_name="add_numbers",
+                        tool_call_id="call-2",
+                        tool_arguments={"a": 2, "b": 3},
+                    ),
+                    ToolCallTurn(
+                        tool_name="echo",
+                        tool_call_id="call-1",
+                        tool_arguments={"message": "hi"},
+                    ),
+                ],
+            )
 
     def test_build_execution_plan_uses_tool_call_metadata_for_declared_dependencies(self) -> None:
         plan = build_execution_plan(

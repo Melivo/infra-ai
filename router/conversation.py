@@ -144,6 +144,8 @@ class DeclaredPlanNodeSpec:
 
 @dataclass(frozen=True)
 class DeclaredPlanSpec:
+    """Declarative plan truth before execution strategy and progress are applied."""
+
     nodes: list[DeclaredPlanNodeSpec] = field(default_factory=list)
 
     def node_for(self, tool_call_id: str) -> DeclaredPlanNodeSpec | None:
@@ -182,6 +184,8 @@ class DeclaredPlanSpec:
 
 @dataclass(frozen=True)
 class ExecutionPlan:
+    """Materialized execution state derived from a declared plan spec."""
+
     strategy: ExecutionStrategy = ExecutionStrategy.SEQUENTIAL
     nodes: list[ExecutionPlanNode] = field(default_factory=list)
 
@@ -349,14 +353,31 @@ def build_execution_plan(
     strategy: ExecutionStrategy = ExecutionStrategy.SEQUENTIAL,
     declared_plan: DeclaredPlanSpec | None = None,
 ) -> ExecutionPlan:
+    """Compatibility wrapper that can recover declared plan state from tool calls."""
     declared_plan_spec = declared_plan or declared_plan_spec_from_tool_calls(tool_calls)
-    _validate_declared_plan_spec_inputs(tool_calls, declared_plan_spec)
+    return materialize_execution_plan_from_declared_plan_spec(
+        declared_plan_spec,
+        tool_calls,
+        strategy=strategy,
+    )
+
+
+def materialize_execution_plan_from_declared_plan_spec(
+    declared_plan: DeclaredPlanSpec,
+    tool_calls: list[ToolCallTurn],
+    *,
+    strategy: ExecutionStrategy = ExecutionStrategy.SEQUENTIAL,
+) -> ExecutionPlan:
+    """Materialize an executable plan from explicit declarative plan state."""
+    validate_declared_plan_spec(declared_plan)
+    _validate_declared_plan_spec_inputs(tool_calls, declared_plan)
+    tool_calls_by_id = _tool_calls_by_id(tool_calls)
     plan = create_declared_execution_plan(strategy=strategy)
-    for tool_call in tool_calls:
+    for declared_node in declared_plan.nodes:
         plan = append_declared_plan_node(
             plan,
-            tool_call,
-            depends_on_call_ids=declared_plan_spec.depends_on_call_ids_for(tool_call.tool_call_id),
+            tool_calls_by_id[declared_node.tool_call_id],
+            depends_on_call_ids=declared_node.depends_on_call_ids,
         )
     plan = derive_strategy_dependencies(plan)
     validate_execution_plan(plan)
@@ -373,6 +394,22 @@ def declared_plan_spec_from_tool_calls(tool_calls: list[ToolCallTurn]) -> Declar
             ),
         )
     return declared_plan
+
+
+def validate_declared_plan_spec(declared_plan: DeclaredPlanSpec) -> None:
+    known_call_ids: list[str] = []
+    for node in declared_plan.nodes:
+        if node.tool_call_id in known_call_ids:
+            raise ExecutionPlanValidationError(
+                f"Declared plan spec contains duplicate tool call id: {node.tool_call_id}"
+            )
+        _validate_declared_dependency_call_ids_in_declared_plan_spec(
+            known_call_ids,
+            tool_call_id=node.tool_call_id,
+            declared_dependency_call_ids=node.depends_on_call_ids,
+        )
+        known_call_ids.append(node.tool_call_id)
+    _validate_declared_plan_spec_dependency_cycles(declared_plan)
 
 
 def _validate_declared_dependency_call_ids_in_declared_plan_spec(
@@ -536,12 +573,14 @@ def _validate_declared_plan_spec_inputs(
             raise ExecutionPlanValidationError(
                 "Declared plan spec must match tool call ids in order."
             )
-        _validate_declared_dependency_call_ids_in_declared_plan_spec(
-            known_call_ids,
-            tool_call_id=declared_node.tool_call_id,
-            declared_dependency_call_ids=declared_node.depends_on_call_ids,
-        )
         known_call_ids.append(declared_node.tool_call_id)
+
+
+def _tool_calls_by_id(tool_calls: list[ToolCallTurn]) -> dict[str, ToolCallTurn]:
+    return {
+        tool_call.tool_call_id: tool_call
+        for tool_call in tool_calls
+    }
 
 
 def apply_tool_result_to_plan(plan: ExecutionPlan, result: ToolResultTurn) -> ExecutionPlan:
@@ -908,6 +947,33 @@ def _validate_execution_plan_dependency_cycles(plan: ExecutionPlan) -> None:
             cycle = [*visiting[visiting.index(call_id) :], call_id]
             raise ExecutionPlanValidationError(
                 "Execution plan contains a dependency cycle: " + " -> ".join(cycle)
+            )
+
+        visiting.append(call_id)
+        for dependency_call_id in dependency_graph.get(call_id, []):
+            visit(dependency_call_id)
+        visiting.pop()
+        visited.add(call_id)
+
+    for call_id in dependency_graph:
+        visit(call_id)
+
+
+def _validate_declared_plan_spec_dependency_cycles(declared_plan: DeclaredPlanSpec) -> None:
+    dependency_graph = {
+        node.tool_call_id: list(node.depends_on_call_ids)
+        for node in declared_plan.nodes
+    }
+    visiting: list[str] = []
+    visited: set[str] = set()
+
+    def visit(call_id: str) -> None:
+        if call_id in visited:
+            return
+        if call_id in visiting:
+            cycle = [*visiting[visiting.index(call_id) :], call_id]
+            raise ExecutionPlanValidationError(
+                "Declared plan spec contains a dependency cycle: " + " -> ".join(cycle)
             )
 
         visiting.append(call_id)

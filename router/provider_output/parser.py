@@ -12,8 +12,8 @@ from router.conversation import (
     FinalTurn,
     StepPhase,
     ToolCallTurn,
-    build_execution_plan,
     create_execution_step,
+    materialize_execution_plan_from_declared_plan_spec,
 )
 from router.schemas import JSONValue
 
@@ -196,13 +196,13 @@ def _assistant_step(
         metadata=dict(metadata),
     )
     try:
-        plan = build_execution_plan(
+        plan = materialize_execution_plan_from_declared_plan_spec(
+            declared_plan,
             [
                 turn
                 for turn in tool_call_turns
                 if isinstance(turn, ToolCallTurn)
             ],
-            declared_plan=declared_plan,
         )
     except ExecutionPlanValidationError as exc:
         raise invalid_model_tool_call(str(exc)) from exc
