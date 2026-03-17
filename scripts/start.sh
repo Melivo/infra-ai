@@ -130,6 +130,28 @@ wait_for_router_ready() {
   return 1
 }
 
+wait_for_vllm_ready() {
+  local url="$1"
+  local attempts="${INFRA_AI_VLLM_READY_RETRIES:-60}"
+  local sleep_s="${INFRA_AI_VLLM_READY_SLEEP_S:-2}"
+  local attempt=1
+
+  echo "waiting for vLLM readiness at ${url}"
+
+  while [[ "${attempt}" -le "${attempts}" ]]; do
+    if curl --fail --silent --show-error "${url}" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep "${sleep_s}"
+    attempt="$((attempt + 1))"
+  done
+
+  echo "vLLM did not become ready after ${attempts} attempts" >&2
+  echo "expected readiness endpoint: ${url}" >&2
+  echo "check: docker logs vllm-qwen" >&2
+  return 1
+}
+
 should_launch_cli() {
   case "${CLI_MODE}" in
     always)
@@ -177,6 +199,7 @@ set +a
 
 ROUTER_ROOT_URL="http://${INFRA_AI_ROUTER_HOST}:${INFRA_AI_ROUTER_PORT}"
 ROUTER_V1_URL="${ROUTER_ROOT_URL}/v1"
+LOCAL_VLLM_READY_URL="${INFRA_AI_LOCAL_VLLM_BASE_URL%/}/models"
 
 docker compose -f "${REPO_ROOT}/vllm/docker-compose.yml" --env-file "${REPO_ROOT}/vllm/.env" up -d
 
@@ -207,6 +230,7 @@ else
   router_pid="$(cat "${PID_FILE}")"
 fi
 
+wait_for_vllm_ready "${LOCAL_VLLM_READY_URL}"
 wait_for_router_ready "${ROUTER_ROOT_URL}/healthz"
 
 echo "vLLM started"

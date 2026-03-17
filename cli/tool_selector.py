@@ -42,7 +42,7 @@ def select_tools(router_url: str) -> list[str]:
                     f"{tool['description']}"
                 ),
                 value=tool["name"],
-                checked=tool["enabled_by_default"],
+                checked=False,
             )
             for tool in tools
         ],

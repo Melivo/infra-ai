@@ -35,7 +35,7 @@ def build_payload(
         "max_tokens": max_tokens,
         "stream": stream,
     }
-    if allowed_tools:
+    if allowed_tools is not None:
         payload["allowed_tools"] = allowed_tools
     return payload
 
@@ -305,7 +305,7 @@ def _run_request(
 
 
 def run_interactive(args: argparse.Namespace) -> None:
-    selected_tools = select_tools(args.router_url) or None
+    selected_tools = select_tools(args.router_url)
 
     print(f"infra-ai CLI connected to {args.router_url}")
     print(f"route={args.route} model={args.model}")
@@ -345,7 +345,7 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     prompt = _read_prompt(args)
-    selected_tools = select_tools(args.router_url) or None
+    selected_tools = select_tools(args.router_url)
     _run_request(args=args, prompt=prompt, allowed_tools=selected_tools)
 
 

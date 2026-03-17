@@ -1,14 +1,33 @@
 from __future__ import annotations
 
+import io
 import pathlib
 import subprocess
 import sys
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
-from cli.main import parse_args, should_run_interactive
+from cli import tool_selector
+from cli.main import build_payload, parse_args, run_interactive, should_run_interactive
 
 
 class CLIEntrypointTests(unittest.TestCase):
+    def test_build_payload_preserves_explicit_empty_tool_selection(self) -> None:
+        payload = build_payload(
+            prompt="Hallo",
+            model="auto",
+            route="auto",
+            system_prompt=None,
+            temperature=0.2,
+            max_tokens=128,
+            stream=False,
+            allowed_tools=[],
+        )
+
+        self.assertIn("allowed_tools", payload)
+        self.assertEqual(payload["allowed_tools"], [])
+
     def test_parse_args_accepts_router_url_alias(self) -> None:
         args = parse_args(["--router-url", "http://127.0.0.1:8010/v1", "--capabilities"])
 
@@ -64,6 +83,60 @@ class CLIEntrypointTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0)
         self.assertIn("infra-ai router", result.stdout)
+
+    def test_run_interactive_keeps_empty_tool_selection(self) -> None:
+        args = parse_args([])
+
+        with (
+            patch("cli.main.select_tools", return_value=[]),
+            patch("cli.main._run_request") as run_request,
+            patch("builtins.input", side_effect=["Hallo", "/exit"]),
+        ):
+            run_interactive(args)
+
+        run_request.assert_called_once()
+        self.assertEqual(run_request.call_args.kwargs["allowed_tools"], [])
+
+
+class ToolSelectorTests(unittest.TestCase):
+    def test_tool_prompt_starts_without_preselected_tools(self) -> None:
+        captured: dict[str, object] = {}
+
+        class _FakeTTY(io.StringIO):
+            def isatty(self) -> bool:
+                return True
+
+        class _Prompt:
+            def ask(self) -> list[str]:
+                return []
+
+        def _fake_checkbox(message, *, choices, **kwargs):
+            captured["message"] = message
+            captured["choices"] = choices
+            captured["kwargs"] = kwargs
+            return _Prompt()
+
+        with (
+            patch.object(tool_selector, "_fetch_tools", return_value=[
+                {
+                    "name": "echo",
+                    "description": "Return the provided arguments unchanged.",
+                    "risk_level": "low",
+                    "capabilities": ["debug"],
+                    "enabled_by_default": True,
+                }
+            ]),
+            patch.object(tool_selector, "questionary", SimpleNamespace(checkbox=_fake_checkbox)),
+            patch.object(tool_selector, "Choice", side_effect=lambda **kwargs: kwargs),
+            patch.object(tool_selector.sys, "stdin", _FakeTTY()),
+            patch.object(tool_selector.sys, "stdout", _FakeTTY()),
+        ):
+            selected = tool_selector.select_tools("http://127.0.0.1:8010/v1")
+
+        self.assertEqual(selected, [])
+        choices = captured["choices"]
+        self.assertEqual(len(choices), 1)
+        self.assertFalse(choices[0]["checked"])
 
 
 if __name__ == "__main__":
