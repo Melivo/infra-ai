@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import pathlib
+import tempfile
 import unittest
 from email.message import Message
 from urllib.response import addinfourl
@@ -407,31 +409,31 @@ class RouterHTTPContractTests(unittest.TestCase):
                 },
                 {
                     "name": "filesystem.list",
-                    "description": "List files and directories inside the configured workspace.",
+                    "description": "List direct workspace entries for a directory path.",
                     "risk_level": "medium",
-                    "capabilities": ["filesystem", "list"],
-                    "enabled_by_default": True,
+                    "capabilities": ["filesystem", "list", "workspace"],
+                    "enabled_by_default": False,
                 },
                 {
                     "name": "filesystem.read",
-                    "description": "Read a UTF-8 text file inside the configured workspace.",
+                    "description": "Read a UTF-8 text file inside the workspace root.",
                     "risk_level": "medium",
-                    "capabilities": ["filesystem", "read"],
-                    "enabled_by_default": True,
+                    "capabilities": ["filesystem", "read", "workspace"],
+                    "enabled_by_default": False,
                 },
                 {
                     "name": "git.diff",
-                    "description": "Return a read-only git diff for the current workspace repository.",
+                    "description": "Return a bounded read-only git diff for the workspace repository.",
                     "risk_level": "medium",
-                    "capabilities": ["git", "diff", "read"],
-                    "enabled_by_default": True,
+                    "capabilities": ["git", "diff", "workspace"],
+                    "enabled_by_default": False,
                 },
                 {
                     "name": "git.status",
-                    "description": "Return a read-only git status for the current workspace repository.",
+                    "description": "Return structured read-only git status for the workspace repository.",
                     "risk_level": "medium",
-                    "capabilities": ["git", "read", "status"],
-                    "enabled_by_default": True,
+                    "capabilities": ["git", "status", "workspace"],
+                    "enabled_by_default": False,
                 },
             ],
         )
@@ -568,28 +570,68 @@ class RouterHTTPContractTests(unittest.TestCase):
         self.assertEqual(payload["tool_result"]["output_json"]["sum"], 5)
         self.assertEqual(providers["local_vllm"].last_request, None)
 
-    def test_explicit_tool_call_supports_workspace_bound_filesystem_read(self) -> None:
+    def test_explicit_tool_call_supports_workspace_read_tool_via_router_path(self) -> None:
         app, providers = self.make_app(build_config())
 
-        status_code, response_headers, payload = perform_json_request(
-            app,
-            method="POST",
-            path="/v1/chat/completions",
-            body=build_payload(
-                allowed_tools=["filesystem.read"],
-                tool_call={
-                    "name": "filesystem.read",
-                    "arguments": {"path": "AGENTS.md"},
-                },
-            ),
-        )
+        with tempfile.TemporaryDirectory() as workspace_dir:
+            workspace_path = pathlib.Path(workspace_dir)
+            workspace_path.joinpath("notes.txt").write_text("hello router\n", encoding="utf-8")
+            app.tool_loop_engine._workspace_root = workspace_dir
+
+            status_code, response_headers, payload = perform_json_request(
+                app,
+                method="POST",
+                path="/v1/chat/completions",
+                body=build_payload(
+                    allowed_tools=["filesystem.read"],
+                    tool_call={
+                        "name": "filesystem.read",
+                        "arguments": {"path": "notes.txt"},
+                    },
+                ),
+            )
 
         self.assertEqual(status_code, 200)
         self.assertEqual(response_headers["content-type"], "application/json")
         self.assertEqual(payload["tool_result"]["name"], "filesystem.read")
-        self.assertEqual(payload["tool_result"]["output_json"]["path"], "AGENTS.md")
-        self.assertIn("AGENTS", payload["tool_result"]["output_json"]["content"])
+        self.assertEqual(
+            payload["tool_result"]["output_json"],
+            {
+                "path": "notes.txt",
+                "content": "hello router\n",
+                "encoding": "utf-8",
+                "bytes_read": 13,
+                "truncated": False,
+            },
+        )
         self.assertEqual(providers["local_vllm"].last_request, None)
+
+    def test_explicit_tool_call_rejects_workspace_escape_for_filesystem_tool(self) -> None:
+        app, _ = self.make_app(build_config())
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root_path = pathlib.Path(temp_dir)
+            workspace_path = root_path / "workspace"
+            workspace_path.mkdir()
+            (root_path / "outside.txt").write_text("secret", encoding="utf-8")
+            app.tool_loop_engine._workspace_root = str(workspace_path)
+
+            status_code, response_headers, payload = perform_json_request(
+                app,
+                method="POST",
+                path="/v1/chat/completions",
+                body=build_payload(
+                    allowed_tools=["filesystem.read"],
+                    tool_call={
+                        "name": "filesystem.read",
+                        "arguments": {"path": "../outside.txt"},
+                    },
+                ),
+            )
+
+        self.assertEqual(status_code, 400)
+        self.assertEqual(response_headers["content-type"], "application/json")
+        self.assert_error_payload(payload, error_type="invalid_tool_arguments")
 
     def test_chat_without_tool_call_keeps_existing_provider_path(self) -> None:
         app, providers = self.make_app(build_config())
@@ -653,6 +695,55 @@ class RouterHTTPContractTests(unittest.TestCase):
         self.assertEqual(second_request.messages[-2].tool_calls[0].name, "echo")
         self.assertEqual(second_request.messages[-1].role, "tool")
         self.assertEqual(second_request.messages[-1].content_json, {"message": "hello"})
+
+    def test_model_tool_call_can_execute_real_tool_when_explicitly_allowed(self) -> None:
+        app, providers = self.make_app(build_config())
+
+        with tempfile.TemporaryDirectory() as workspace_dir:
+            pathlib.Path(workspace_dir, "plan.txt").write_text("tool plan\n", encoding="utf-8")
+            app.tool_loop_engine._workspace_root = workspace_dir
+            providers["local_vllm"] = StubProvider(
+                "local_vllm",
+                generations=[
+                    NormalizedGeneration(
+                        message=NormalizedMessage(
+                            role="assistant",
+                            tool_calls=[
+                                NormalizedToolCall(
+                                    call_id="call-read",
+                                    name="filesystem.read",
+                                    arguments={"path": "plan.txt"},
+                                )
+                            ],
+                        ),
+                        final=False,
+                        finish_reason="tool_calls",
+                        response_id="step-1",
+                        provider_name="local_vllm",
+                    ),
+                    NormalizedGeneration(
+                        message=NormalizedMessage(role="assistant", content="done"),
+                        final=True,
+                        finish_reason="stop",
+                        response_id="step-2",
+                        provider_name="local_vllm",
+                    ),
+                ],
+            )
+
+            status_code, _, payload = perform_json_request(
+                app,
+                method="POST",
+                path="/v1/chat/completions",
+                body=build_payload(allowed_tools=["filesystem.read"]),
+            )
+
+        self.assertEqual(status_code, 200)
+        self.assertEqual(payload["choices"][0]["message"]["content"], "done")
+        self.assertEqual(payload["tool_steps"], 1)
+        second_request = providers["local_vllm"].request_history[1]
+        self.assertEqual(second_request.messages[-1].content_json["path"], "plan.txt")
+        self.assertEqual(second_request.messages[-1].content_json["content"], "tool plan\n")
 
     def test_multiple_model_tool_calls_are_executed_sequentially_and_reinjected(self) -> None:
         app, providers = self.make_app(build_config())

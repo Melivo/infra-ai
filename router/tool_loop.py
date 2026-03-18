@@ -218,6 +218,11 @@ class ToolLoopEngine:
                     max_tool_steps=self._max_tool_steps,
                     current_tool_step=current_tool_step,
                     tool_timeout_s=self._tool_timeout_s,
+                    allowed_tool_names=(
+                        frozenset(allowed_tools)
+                        if allowed_tools is not None
+                        else None
+                    ),
                 ),
             )
         except ToolNotFoundError as exc:

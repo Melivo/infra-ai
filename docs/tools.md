@@ -123,6 +123,7 @@ Diese Tools bleiben bewusst konservativ:
 
 - `filesystem.*` ist strikt an den konfigurierten Workspace gebunden.
 - `git.*` arbeitet read-only und nutzt keine mutierenden Git-Operationen.
+- die neuen realen Core-Tools sind nicht `enabled_by_default` und werden erst ueber `allowed_tools` explizit fuer einen Request freigeschaltet.
 - alle Tool-Outputs laufen weiter als strukturierte `content_json`-Payloads durch denselben Registry-/Policy-/Orchestrator-/Tool-Loop-Pfad.
 
 `http.fetch` ist in diesem Schritt bewusst noch nicht registriert, weil dafuer zusaetzliche Boundary- und Security-Policy fuer Netzwerkzugriffe noetig waere, die nicht in denselben kleinen konservativen Phase-1-Scope passt.

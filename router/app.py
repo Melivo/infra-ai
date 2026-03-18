@@ -369,6 +369,11 @@ class RouterApplication:
             request_id=request_id,
             max_tool_steps=self.config.max_tool_steps,
             tool_timeout_s=self.config.tool_timeout_s,
+            allowed_tool_names=(
+                frozenset(allowed_tool_names)
+                if allowed_tool_names is not None
+                else None
+            ),
         )
         for spec in self.tool_registry.list_specs():
             if allowed_tool_names is not None and spec.name not in allowed_tool_names:

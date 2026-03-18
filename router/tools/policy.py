@@ -29,7 +29,16 @@ class ToolPolicy:
 
     def check(self, spec: ToolSpec, ctx: ToolContext) -> None:
         """Allow a tool or raise a clear denial error."""
-        if not spec.enabled_by_default and not self._config.allow_disabled_tools:
+        explicitly_allowed = (
+            ctx.allowed_tool_names is not None
+            and spec.name in ctx.allowed_tool_names
+        )
+
+        if (
+            not spec.enabled_by_default
+            and not explicitly_allowed
+            and not self._config.allow_disabled_tools
+        ):
             raise ToolExecutionDeniedError(
                 f"tool is disabled by default: {spec.name}"
             )
