@@ -51,6 +51,11 @@ class ToolPolicy:
                 f"tool risk level is not allowed: {spec.name} ({spec.risk_level.value})"
             )
 
+        if spec.workspace_required and not ctx.workspace_root:
+            raise ToolExecutionDeniedError(
+                f"tool requires a workspace_root but none is configured: {spec.name}"
+            )
+
         if ctx.current_tool_step >= ctx.max_tool_steps:
             raise ToolExecutionDeniedError(
                 f"maximum tool steps exceeded: {spec.name}"

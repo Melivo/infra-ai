@@ -23,6 +23,7 @@ class ToolSpec:
     risk_level: ToolRiskLevel
     capabilities: list[str]
     enabled_by_default: bool = False
+    workspace_required: bool = False
 
 
 @dataclass(frozen=True)

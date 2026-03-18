@@ -284,6 +284,7 @@ def register_core_tools(registry: ToolRegistry) -> None:
             risk_level=ToolRiskLevel.MEDIUM,
             capabilities=["filesystem", "list", "workspace"],
             enabled_by_default=False,
+            workspace_required=True,
         ),
         FilesystemListExecutor(),
     )
@@ -303,6 +304,7 @@ def register_core_tools(registry: ToolRegistry) -> None:
             risk_level=ToolRiskLevel.MEDIUM,
             capabilities=["filesystem", "read", "workspace"],
             enabled_by_default=False,
+            workspace_required=True,
         ),
         FilesystemReadExecutor(),
     )
@@ -323,6 +325,7 @@ def register_core_tools(registry: ToolRegistry) -> None:
             risk_level=ToolRiskLevel.MEDIUM,
             capabilities=["git", "diff", "workspace"],
             enabled_by_default=False,
+            workspace_required=True,
         ),
         GitDiffExecutor(),
     )
@@ -340,6 +343,7 @@ def register_core_tools(registry: ToolRegistry) -> None:
             risk_level=ToolRiskLevel.MEDIUM,
             capabilities=["git", "status", "workspace"],
             enabled_by_default=False,
+            workspace_required=True,
         ),
         GitStatusExecutor(),
     )
