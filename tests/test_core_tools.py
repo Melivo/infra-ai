@@ -498,5 +498,76 @@ class GitWorkspaceBoundaryTests(unittest.TestCase):
         self.assertEqual(result.error_code, "git_diff_failed")
 
 
+class GitDiffByteBoundednessTests(unittest.TestCase):
+    def _setup_repo_with_multibyte_diff(
+        self,
+    ) -> tuple[pathlib.Path, tempfile.TemporaryDirectory[str]]:
+        """Temp git repo: commit ASCII file, then change it to multi-byte UTF-8 content."""
+        repo_dir, temp_dir = _create_git_repo()
+        repo_dir.joinpath("f.txt").write_text("hello\n", encoding="utf-8")
+        _run_git(repo_dir, "add", "f.txt")
+        _run_git(repo_dir, "commit", "-m", "init")
+        # Modify to content that contains 'é' (\xc3\xa9 in UTF-8)
+        repo_dir.joinpath("f.txt").write_text("café\n", encoding="utf-8")
+        return repo_dir, temp_dir
+
+    def test_git_diff_bytes_read_never_exceeds_max_bytes(self) -> None:
+        """bytes_read must never exceed max_bytes even with multi-byte UTF-8 content."""
+        executor = GitDiffExecutor()
+        repo_dir, temp_dir = self._setup_repo_with_multibyte_diff()
+        self.addCleanup(temp_dir.cleanup)
+
+        # Discover byte position of 'é' (\xc3\xa9) in the full diff output.
+        full_result = asyncio.run(
+            executor.execute(
+                ToolCall(call_id="full", name="git.diff", arguments={"max_bytes": 131072}),
+                _tool_context(str(repo_dir)),
+            )
+        )
+        self.assertTrue(full_result.ok)
+        full_bytes = full_result.output_json["diff"].encode("utf-8")
+        self.assertIn(b"\xc3\xa9", full_bytes, "Test requires 'é' in diff bytes")
+
+        # Cut right after the lead byte of 'é' (mid-sequence).
+        pos_lead = full_bytes.index(b"\xc3\xa9")
+        max_bytes_mid = pos_lead + 1
+
+        result = asyncio.run(
+            executor.execute(
+                ToolCall(
+                    call_id="cut",
+                    name="git.diff",
+                    arguments={"max_bytes": max_bytes_mid},
+                ),
+                _tool_context(str(repo_dir)),
+            )
+        )
+
+        self.assertTrue(result.ok)
+        diff = result.output_json["diff"]
+        actual_byte_len = len(diff.encode("utf-8"))
+        self.assertLessEqual(actual_byte_len, max_bytes_mid)
+        self.assertEqual(result.output_json["bytes_read"], actual_byte_len)
+        self.assertTrue(result.output_json["truncated"])
+        self.assertNotIn("é", diff)  # partial 'é' must have been trimmed
+
+    def test_git_diff_bytes_read_equals_utf8_byte_length_of_diff(self) -> None:
+        """bytes_read must always equal len(diff.encode('utf-8')), not char count."""
+        executor = GitDiffExecutor()
+        repo_dir, temp_dir = self._setup_repo_with_multibyte_diff()
+        self.addCleanup(temp_dir.cleanup)
+
+        result = asyncio.run(
+            executor.execute(
+                ToolCall(call_id="c", name="git.diff", arguments={"max_bytes": 131072}),
+                _tool_context(str(repo_dir)),
+            )
+        )
+
+        self.assertTrue(result.ok)
+        diff = result.output_json["diff"]
+        self.assertEqual(result.output_json["bytes_read"], len(diff.encode("utf-8")))
+
+
 if __name__ == "__main__":
     unittest.main()

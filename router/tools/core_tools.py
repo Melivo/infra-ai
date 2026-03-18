@@ -234,7 +234,21 @@ class GitDiffExecutor:
                 error_message=_git_error_message(completed, "git.diff failed."),
             )
 
-        diff_text = completed.stdout[:max_bytes]
+        diff_bytes_full = completed.stdout.encode("utf-8")
+        truncated = len(diff_bytes_full) > max_bytes
+        raw_bytes = diff_bytes_full[:max_bytes]
+        try:
+            diff_text = raw_bytes.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            if exc.reason == "unexpected end of data" and exc.end == len(raw_bytes):
+                # Byte cut landed mid-sequence; trim to last valid UTF-8 boundary.
+                raw_bytes = raw_bytes[: exc.start]
+                diff_text = raw_bytes.decode("utf-8")
+                truncated = True
+            else:
+                # Unreachable: encoding from a valid Python string always yields valid UTF-8.
+                diff_text = raw_bytes.decode("utf-8", errors="replace")
+                truncated = True
         return ToolResult(
             call_id=call.call_id,
             name=call.name,
@@ -245,8 +259,8 @@ class GitDiffExecutor:
                 "cached": cached,
                 "context_lines": context_lines,
                 "diff": diff_text,
-                "bytes_read": len(diff_text.encode("utf-8")),
-                "truncated": len(completed.stdout.encode("utf-8")) > max_bytes,
+                "bytes_read": len(raw_bytes),
+                "truncated": truncated,
             },
             metadata={"tool_step": ctx.current_tool_step},
         )
