@@ -143,11 +143,10 @@ class ErrorProvider(Provider):
 
 class FailingExecutor:
     async def execute(self, call: ToolCall, ctx: ToolContext) -> ToolResult:
-        del call
         del ctx
         return ToolResult(
-            call_id="fail-call",
-            name="failing_tool",
+            call_id=call.call_id,
+            name=call.name,
             ok=False,
             error_code="tool_execution_failed",
             error_message="executor failed",
@@ -629,9 +628,12 @@ class RouterHTTPContractTests(unittest.TestCase):
                 ),
             )
 
-        self.assertEqual(status_code, 400)
+        # Workspace boundary violation is a structured tool failure, not an HTTP error.
+        # The explicit tool_call path returns HTTP 200 with ok=False in tool_result.
+        self.assertEqual(status_code, 200)
         self.assertEqual(response_headers["content-type"], "application/json")
-        self.assert_error_payload(payload, error_type="invalid_tool_arguments")
+        self.assertFalse(payload["tool_result"]["ok"])
+        self.assertEqual(payload["tool_result"]["error_code"], "invalid_tool_arguments")
 
     def test_chat_without_tool_call_keeps_existing_provider_path(self) -> None:
         app, providers = self.make_app(build_config())
@@ -990,8 +992,9 @@ class RouterHTTPContractTests(unittest.TestCase):
             body=build_payload(),
         )
 
-        self.assertEqual(status_code, 400)
-        self.assert_error_payload(payload, error_type="invalid_tool_arguments")
+        # Invalid tool arguments are fed back to the model as a failed tool result.
+        # The model then responds normally — no hard HTTP error.
+        self.assertEqual(status_code, 200)
 
     def test_repeated_identical_tool_call_is_stopped(self) -> None:
         app, providers = self.make_app(build_config())
@@ -1079,8 +1082,9 @@ class RouterHTTPContractTests(unittest.TestCase):
             body=build_payload(),
         )
 
-        self.assertEqual(status_code, 500)
-        self.assert_error_payload(payload, error_type="tool_execution_failed")
+        # A tool returning ok=False is fed back to the model as a failed tool result.
+        # The model then responds normally — no hard HTTP error.
+        self.assertEqual(status_code, 200)
 
     def test_tool_timeout_returns_consistent_error(self) -> None:
         app, providers = self.make_app(build_config(tool_timeout_s=0.01))

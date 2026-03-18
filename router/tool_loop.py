@@ -234,11 +234,14 @@ class ToolLoopEngine:
                 str(exc),
             ) from exc
         except ToolArgumentsValidationError as exc:
-            raise ToolLoopError(
-                HTTPStatus.BAD_REQUEST,
-                "invalid_tool_arguments",
-                str(exc),
-            ) from exc
+            # Return a structured failure so the model can see the error and recover.
+            return ToolResult(
+                call_id=tool_call.call_id,
+                name=tool_call.name,
+                ok=False,
+                error_code="invalid_tool_arguments",
+                error_message=str(exc),
+            )
         except ToolExecutionTimeoutError as exc:
             raise ToolLoopError(
                 HTTPStatus.GATEWAY_TIMEOUT,
@@ -252,19 +255,7 @@ class ToolLoopEngine:
                 str(exc),
             ) from exc
 
-        if not result.ok:
-            error_type = "tool_timeout" if result.error_code == "tool_timeout" else "tool_execution_failed"
-            status_code = (
-                HTTPStatus.GATEWAY_TIMEOUT
-                if error_type == "tool_timeout"
-                else HTTPStatus.INTERNAL_SERVER_ERROR
-            )
-            raise ToolLoopError(
-                status_code,
-                error_type,
-                result.error_message or f"tool execution failed: {result.name}",
-            )
-
+        # Return the result as-is (ok or not); let the model handle graceful failures.
         return result
 
 
