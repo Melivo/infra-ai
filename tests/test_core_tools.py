@@ -261,5 +261,170 @@ class GitToolTests(unittest.TestCase):
         )
 
 
+class FilesystemReadBoundednessTests(unittest.TestCase):
+    def test_filesystem_read_does_not_call_read_bytes_to_truncate(self) -> None:
+        """filesystem.read must not load the full file into memory just to truncate it."""
+        executor = FilesystemReadExecutor()
+
+        with tempfile.TemporaryDirectory() as workspace_dir:
+            workspace_path = pathlib.Path(workspace_dir)
+            workspace_path.joinpath("large.txt").write_bytes(b"x" * 1000)
+
+            original_read_bytes = pathlib.Path.read_bytes
+            read_bytes_called: list[bool] = []
+
+            def spy_read_bytes(self: pathlib.Path) -> bytes:
+                read_bytes_called.append(True)
+                return original_read_bytes(self)
+
+            with patch.object(pathlib.Path, "read_bytes", spy_read_bytes):
+                result = asyncio.run(
+                    executor.execute(
+                        ToolCall(
+                            call_id="call-read",
+                            name="filesystem.read",
+                            arguments={"path": "large.txt", "max_bytes": 10},
+                        ),
+                        _tool_context(workspace_dir),
+                    )
+                )
+
+        self.assertTrue(result.ok)
+        self.assertTrue(result.output_json["truncated"])
+        self.assertEqual(result.output_json["bytes_read"], 10)
+        self.assertFalse(
+            read_bytes_called,
+            "filesystem.read must not call Path.read_bytes() to truncate large files",
+        )
+
+    def test_filesystem_read_truncation_content_is_correct(self) -> None:
+        """Truncated content must be exactly the first max_bytes bytes decoded."""
+        executor = FilesystemReadExecutor()
+
+        with tempfile.TemporaryDirectory() as workspace_dir:
+            workspace_path = pathlib.Path(workspace_dir)
+            workspace_path.joinpath("data.txt").write_bytes(b"hello world extra")
+
+            result = asyncio.run(
+                executor.execute(
+                    ToolCall(
+                        call_id="call-read",
+                        name="filesystem.read",
+                        arguments={"path": "data.txt", "max_bytes": 5},
+                    ),
+                    _tool_context(workspace_dir),
+                )
+            )
+
+        self.assertTrue(result.ok)
+        self.assertTrue(result.output_json["truncated"])
+        self.assertEqual(result.output_json["bytes_read"], 5)
+        self.assertEqual(result.output_json["content"], "hello")
+        self.assertEqual(result.output_text, "hello")
+
+    def test_filesystem_read_no_truncation_flag_when_file_fits_exactly(self) -> None:
+        """truncated must be False when the file fits exactly within max_bytes."""
+        executor = FilesystemReadExecutor()
+
+        with tempfile.TemporaryDirectory() as workspace_dir:
+            workspace_path = pathlib.Path(workspace_dir)
+            workspace_path.joinpath("exact.txt").write_bytes(b"abcde")
+
+            result = asyncio.run(
+                executor.execute(
+                    ToolCall(
+                        call_id="call-read",
+                        name="filesystem.read",
+                        arguments={"path": "exact.txt", "max_bytes": 5},
+                    ),
+                    _tool_context(workspace_dir),
+                )
+            )
+
+        self.assertTrue(result.ok)
+        self.assertFalse(result.output_json["truncated"])
+        self.assertEqual(result.output_json["bytes_read"], 5)
+
+
+class GitStatusBoundednessTests(unittest.TestCase):
+    def test_git_status_output_text_contains_only_returned_entries(self) -> None:
+        """output_text must not include entries that were cut by max_entries."""
+        executor = GitStatusExecutor()
+        repo_dir, temp_dir = _create_git_repo()
+        self.addCleanup(temp_dir.cleanup)
+
+        for i in range(5):
+            repo_dir.joinpath(f"file_{i}.txt").write_text(f"content {i}\n", encoding="utf-8")
+
+        result = asyncio.run(
+            executor.execute(
+                ToolCall(
+                    call_id="call-status",
+                    name="git.status",
+                    arguments={"max_entries": 2},
+                ),
+                _tool_context(str(repo_dir)),
+            )
+        )
+
+        self.assertTrue(result.ok)
+        self.assertTrue(result.output_json["truncated"])
+        self.assertEqual(result.output_json["returned_entry_count"], 2)
+
+        returned_paths = {e["path"] for e in result.output_json["entries"]}
+        all_paths = {f"file_{i}.txt" for i in range(5)}
+        truncated_paths = all_paths - returned_paths
+        for path in truncated_paths:
+            self.assertNotIn(path, result.output_text or "")
+
+
+class GitWorkspaceBoundaryTests(unittest.TestCase):
+    def test_git_status_fails_cleanly_when_workspace_is_not_a_git_repo(self) -> None:
+        """git.status must not silently use a parent repo above workspace_root."""
+        executor = GitStatusExecutor()
+        parent_repo_dir, parent_temp = _create_git_repo()
+        self.addCleanup(parent_temp.cleanup)
+
+        workspace_dir = parent_repo_dir / "nested_workspace"
+        workspace_dir.mkdir()
+
+        result = asyncio.run(
+            executor.execute(
+                ToolCall(
+                    call_id="call-status",
+                    name="git.status",
+                    arguments={},
+                ),
+                _tool_context(str(workspace_dir)),
+            )
+        )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error_code, "git_status_failed")
+
+    def test_git_diff_fails_cleanly_when_workspace_is_not_a_git_repo(self) -> None:
+        """git.diff must not silently use a parent repo above workspace_root."""
+        executor = GitDiffExecutor()
+        parent_repo_dir, parent_temp = _create_git_repo()
+        self.addCleanup(parent_temp.cleanup)
+
+        workspace_dir = parent_repo_dir / "nested_workspace"
+        workspace_dir.mkdir()
+
+        result = asyncio.run(
+            executor.execute(
+                ToolCall(
+                    call_id="call-diff",
+                    name="git.diff",
+                    arguments={},
+                ),
+                _tool_context(str(workspace_dir)),
+            )
+        )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error_code, "git_diff_failed")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -43,10 +43,12 @@ class FilesystemReadExecutor:
                 f"{call.name} path is not a readable file: {call.arguments['path']}"
             )
 
-        file_bytes = resolved.read_bytes()
-        returned_bytes = file_bytes[:max_bytes]
+        with open(resolved, "rb") as fh:
+            probe = fh.read(max_bytes + 1)
+        truncated = len(probe) > max_bytes
+        raw_bytes = probe[:max_bytes]
         try:
-            content = returned_bytes.decode("utf-8")
+            content = raw_bytes.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise ToolArgumentsValidationError(
                 f"{call.name} only supports UTF-8 text files: {call.arguments['path']}"
@@ -62,8 +64,8 @@ class FilesystemReadExecutor:
                 "path": relative_path,
                 "content": content,
                 "encoding": "utf-8",
-                "bytes_read": len(returned_bytes),
-                "truncated": len(file_bytes) > max_bytes,
+                "bytes_read": len(raw_bytes),
+                "truncated": truncated,
             },
             metadata={"tool_step": ctx.current_tool_step},
         )
@@ -155,7 +157,7 @@ class GitStatusExecutor:
             call_id=call.call_id,
             name=call.name,
             ok=True,
-            output_text=status_text.strip(),
+            output_text=_git_status_output_text(branch_line, returned_entries),
             output_json={
                 "branch": _parse_git_branch_line(branch_line),
                 "entries": returned_entries,
@@ -445,6 +447,7 @@ def _run_git(
             "GIT_PAGER": "cat",
             "LC_ALL": "C",
             "LANG": "C",
+            "GIT_CEILING_DIRECTORIES": str(workspace_root.parent),
         },
         timeout=timeout_s,
     )
@@ -513,6 +516,14 @@ def _git_status_counts(entries: list[dict[str, Any]]) -> dict[str, int]:
         "unstaged": sum(1 for entry in entries if entry["unstaged"]),
         "untracked": sum(1 for entry in entries if entry["untracked"]),
     }
+
+
+def _git_status_output_text(branch_line: str, entries: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    if branch_line:
+        parts.append(branch_line)
+    parts.extend(e["raw"] for e in entries)
+    return "\n".join(parts)
 
 
 def _failure(call: ToolCall, *, error_code: str, error_message: str) -> ToolResult:
