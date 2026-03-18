@@ -261,6 +261,78 @@ class GitToolTests(unittest.TestCase):
         )
 
 
+class FilesystemReadUtf8BoundaryTests(unittest.TestCase):
+    def test_filesystem_read_handles_utf8_boundary_cut_gracefully(self) -> None:
+        """max_bytes cutting mid-UTF-8 sequence must return the largest valid prefix, not fail."""
+        executor = FilesystemReadExecutor()
+
+        with tempfile.TemporaryDirectory() as workspace_dir:
+            # "café extra": 'c'(1) 'a'(1) 'f'(1) 'é'(2: \xc3\xa9) ' extra'(6) = 11 bytes total
+            # max_bytes=4 cuts after \xc3 (the lead byte of é), before \xa9 (its continuation)
+            pathlib.Path(workspace_dir).joinpath("t.txt").write_text("café extra", encoding="utf-8")
+
+            result = asyncio.run(
+                executor.execute(
+                    ToolCall(
+                        call_id="call-utf8",
+                        name="filesystem.read",
+                        arguments={"path": "t.txt", "max_bytes": 4},
+                    ),
+                    _tool_context(workspace_dir),
+                )
+            )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.output_json["content"], "caf")
+        self.assertEqual(result.output_json["bytes_read"], 3)
+        self.assertTrue(result.output_json["truncated"])
+        self.assertEqual(result.output_text, "caf")
+
+    def test_filesystem_read_exact_utf8_boundary_decodes_without_trimming(self) -> None:
+        """max_bytes exactly at a UTF-8 character boundary must decode without trimming."""
+        executor = FilesystemReadExecutor()
+
+        with tempfile.TemporaryDirectory() as workspace_dir:
+            # "café" = 5 UTF-8 bytes exactly; with max_bytes=5 the whole string fits
+            pathlib.Path(workspace_dir).joinpath("t.txt").write_text("café", encoding="utf-8")
+
+            result = asyncio.run(
+                executor.execute(
+                    ToolCall(
+                        call_id="call-exact",
+                        name="filesystem.read",
+                        arguments={"path": "t.txt", "max_bytes": 5},
+                    ),
+                    _tool_context(workspace_dir),
+                )
+            )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.output_json["content"], "café")
+        self.assertEqual(result.output_json["bytes_read"], 5)
+        self.assertFalse(result.output_json["truncated"])
+
+    def test_filesystem_read_rejects_genuinely_invalid_utf8(self) -> None:
+        """A file with bytes that are not valid UTF-8 at all must still be rejected."""
+        executor = FilesystemReadExecutor()
+
+        with tempfile.TemporaryDirectory() as workspace_dir:
+            # \xff is an invalid UTF-8 start byte (not an incomplete sequence)
+            pathlib.Path(workspace_dir).joinpath("binary.bin").write_bytes(b"\xff\xfe\x41\x00")
+
+            with self.assertRaises(ToolArgumentsValidationError):
+                asyncio.run(
+                    executor.execute(
+                        ToolCall(
+                            call_id="call-binary",
+                            name="filesystem.read",
+                            arguments={"path": "binary.bin"},
+                        ),
+                        _tool_context(workspace_dir),
+                    )
+                )
+
+
 class FilesystemReadBoundednessTests(unittest.TestCase):
     def test_filesystem_read_does_not_call_read_bytes_to_truncate(self) -> None:
         """filesystem.read must not load the full file into memory just to truncate it."""

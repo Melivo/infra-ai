@@ -50,9 +50,15 @@ class FilesystemReadExecutor:
         try:
             content = raw_bytes.decode("utf-8")
         except UnicodeDecodeError as exc:
-            raise ToolArgumentsValidationError(
-                f"{call.name} only supports UTF-8 text files: {call.arguments['path']}"
-            ) from exc
+            if exc.reason == "unexpected end of data" and exc.end == len(raw_bytes):
+                # The byte cut landed mid-sequence. Trim to the last valid UTF-8 boundary.
+                raw_bytes = raw_bytes[: exc.start]
+                content = raw_bytes.decode("utf-8")
+                truncated = True
+            else:
+                raise ToolArgumentsValidationError(
+                    f"{call.name} only supports UTF-8 text files: {call.arguments['path']}"
+                ) from exc
 
         relative_path = _relative_workspace_path(workspace_root, resolved)
         return ToolResult(
