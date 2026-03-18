@@ -101,7 +101,7 @@ V1 behandelt dabei mindestens:
 - `invalid_model_tool_call`
 - `tool_loop_repeated_call_detected`
 
-## Aktuelles Beispieltool
+## Aktuell registrierte Tools
 
 Der Router registriert aktuell zwei kleine Beispieltools:
 
@@ -111,6 +111,21 @@ Der Router registriert aktuell zwei kleine Beispieltools:
 `echo` gibt die uebergebenen Argumente unveraendert als `ToolResult` zurueck.
 
 `add_numbers` addiert zwei numerische Felder `a` und `b` mit einem strengen Input-Vertrag. Das Tool dient als deterministisches Beispiel fuer Tool-Loop, Validierung und Fehlerfaelle.
+
+Zusaetzlich registriert Phase 1 die ersten kleinen realen Core-Tools:
+
+- `filesystem.read`
+- `filesystem.list`
+- `git.status`
+- `git.diff`
+
+Diese Tools bleiben bewusst konservativ:
+
+- `filesystem.*` ist strikt an den konfigurierten Workspace gebunden.
+- `git.*` arbeitet read-only und nutzt keine mutierenden Git-Operationen.
+- alle Tool-Outputs laufen weiter als strukturierte `content_json`-Payloads durch denselben Registry-/Policy-/Orchestrator-/Tool-Loop-Pfad.
+
+`http.fetch` ist in diesem Schritt bewusst noch nicht registriert, weil dafuer zusaetzliche Boundary- und Security-Policy fuer Netzwerkzugriffe noetig waere, die nicht in denselben kleinen konservativen Phase-1-Scope passt.
 
 ## Ausblick
 

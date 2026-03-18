@@ -39,6 +39,7 @@ from router.providers.openai import (
 from router.providers.openai.models import OPENAI_MODELS_SLOT
 from router.schemas import JSONValue, RouterConfig, ROUTING_MODES, StreamingResponse
 from router.tool_loop import ToolLoopEngine, ToolLoopError
+from router.tools.core_tools import register_core_tools
 from router.tools.example_tools import register_example_tools
 from router.tools.orchestrator import ToolOrchestrator
 from router.tools.policy import ToolExecutionDeniedError, ToolPolicy
@@ -99,6 +100,7 @@ class RouterApplication:
         )
         self.tool_registry = ToolRegistry()
         register_example_tools(self.tool_registry)
+        register_core_tools(self.tool_registry)
         self.tool_policy = ToolPolicy()
         self.tool_orchestrator = ToolOrchestrator(
             registry=self.tool_registry,

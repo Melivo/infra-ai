@@ -404,7 +404,35 @@ class RouterHTTPContractTests(unittest.TestCase):
                     "risk_level": "low",
                     "capabilities": ["debug"],
                     "enabled_by_default": True,
-                }
+                },
+                {
+                    "name": "filesystem.list",
+                    "description": "List files and directories inside the configured workspace.",
+                    "risk_level": "medium",
+                    "capabilities": ["filesystem", "list"],
+                    "enabled_by_default": True,
+                },
+                {
+                    "name": "filesystem.read",
+                    "description": "Read a UTF-8 text file inside the configured workspace.",
+                    "risk_level": "medium",
+                    "capabilities": ["filesystem", "read"],
+                    "enabled_by_default": True,
+                },
+                {
+                    "name": "git.diff",
+                    "description": "Return a read-only git diff for the current workspace repository.",
+                    "risk_level": "medium",
+                    "capabilities": ["git", "diff", "read"],
+                    "enabled_by_default": True,
+                },
+                {
+                    "name": "git.status",
+                    "description": "Return a read-only git status for the current workspace repository.",
+                    "risk_level": "medium",
+                    "capabilities": ["git", "read", "status"],
+                    "enabled_by_default": True,
+                },
             ],
         )
 
@@ -538,6 +566,29 @@ class RouterHTTPContractTests(unittest.TestCase):
         self.assertEqual(response_headers["content-type"], "application/json")
         self.assertEqual(payload["tool_result"]["name"], "add_numbers")
         self.assertEqual(payload["tool_result"]["output_json"]["sum"], 5)
+        self.assertEqual(providers["local_vllm"].last_request, None)
+
+    def test_explicit_tool_call_supports_workspace_bound_filesystem_read(self) -> None:
+        app, providers = self.make_app(build_config())
+
+        status_code, response_headers, payload = perform_json_request(
+            app,
+            method="POST",
+            path="/v1/chat/completions",
+            body=build_payload(
+                allowed_tools=["filesystem.read"],
+                tool_call={
+                    "name": "filesystem.read",
+                    "arguments": {"path": "AGENTS.md"},
+                },
+            ),
+        )
+
+        self.assertEqual(status_code, 200)
+        self.assertEqual(response_headers["content-type"], "application/json")
+        self.assertEqual(payload["tool_result"]["name"], "filesystem.read")
+        self.assertEqual(payload["tool_result"]["output_json"]["path"], "AGENTS.md")
+        self.assertIn("AGENTS", payload["tool_result"]["output_json"]["content"])
         self.assertEqual(providers["local_vllm"].last_request, None)
 
     def test_chat_without_tool_call_keeps_existing_provider_path(self) -> None:
