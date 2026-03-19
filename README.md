@@ -163,7 +163,7 @@ Private Inhalte wie Secrets, produktive Prompts, Kundendaten oder private Wissen
 
 ## Lizenz
 
-Dieses Repository ist proprietaer. Alle Rechte vorbehalten. Nutzung, Kopieren, Aenderung, Weitergabe oder Veroeffentlichung sind ohne vorherige schriftliche Genehmigung nicht erlaubt.
+Dieses Repository ist proprietaer. Alle Rechte vorbehalten. Es werden keine Nutzungsrechte eingeraeumt. Soweit Inhalte unter Einsatz von KI-Systemen erstellt wurden, werden Rechte nur an den jeweils gesetzlich schutzfaehigen Bestandteilen beansprucht.
 
 ## Router-Introspection
 
