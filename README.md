@@ -161,6 +161,10 @@ Dieses Repository enthaelt die oeffentliche Infrastruktur von `infra-ai`:
 
 Private Inhalte wie Secrets, produktive Prompts, Kundendaten oder private Wissensdaten gehoeren in separate private Repositories. Details dazu stehen in [docs/repositories.md](/home/visimeos/Projects/infra-ai/docs/repositories.md).
 
+## Lizenz
+
+Dieses Repository ist proprietaer. Alle Rechte vorbehalten. Nutzung, Kopieren, Aenderung, Weitergabe oder Veroeffentlichung sind ohne vorherige schriftliche Genehmigung nicht erlaubt.
+
 ## Router-Introspection
 
 `GET /v1/router/capabilities` ist ein read-only Introspection-Endpunkt fuer CLI und spaetere Frontends.
