@@ -98,6 +98,7 @@ class RouterApplication:
             api_key=config.openai_api_key,
             timeout_s=config.request_timeout_s,
         )
+        self._workspace_root = os.getcwd()
         self.tool_registry = ToolRegistry()
         register_example_tools(self.tool_registry)
         register_core_tools(self.tool_registry)
@@ -110,6 +111,7 @@ class RouterApplication:
             tool_orchestrator=self.tool_orchestrator,
             max_tool_steps=config.max_tool_steps,
             tool_timeout_s=config.tool_timeout_s,
+            workspace_root=self._workspace_root,
         )
 
     def healthcheck(self) -> tuple[int, JSONValue]:
@@ -367,6 +369,7 @@ class RouterApplication:
         tool_specs: list[ToolSpec] = []
         ctx = ToolContext(
             request_id=request_id,
+            workspace_root=self._workspace_root,
             max_tool_steps=self.config.max_tool_steps,
             tool_timeout_s=self.config.tool_timeout_s,
             allowed_tool_names=(
