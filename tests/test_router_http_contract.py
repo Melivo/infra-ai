@@ -19,6 +19,7 @@ from router.app import RouterApplication, RouterRequestHandler
 from router.provider_output import ProviderOutput
 from router.providers.base import Provider, ProviderError
 from router.schemas import JSONValue, RouterConfig
+from router.tools.mcp import McpDiscoveredTool, McpServerDefinition
 from router.tools.types import ToolCall, ToolContext, ToolResult, ToolRiskLevel, ToolSpec
 
 
@@ -158,6 +159,24 @@ class SlowExecutor:
         del call
         await asyncio.sleep(ctx.tool_timeout_s + 0.05)
         return ToolResult(call_id="slow-call", name="slow_tool", ok=True, output_text="done")
+
+
+class _FakeMcpCatalogClient:
+    def __init__(
+        self,
+        *,
+        servers: list[McpServerDefinition] | None = None,
+        tools_by_server_id: dict[str, list[McpDiscoveredTool]] | None = None,
+    ) -> None:
+        self.servers = servers or []
+        self.tools_by_server_id = tools_by_server_id or {}
+
+    def list_servers(self, source) -> list[McpServerDefinition]:
+        del source
+        return list(self.servers)
+
+    def discover_tools(self, definition: McpServerDefinition) -> list[McpDiscoveredTool]:
+        return list(self.tools_by_server_id.get(definition.server_id, []))
 
 
 class _NonClosingBytesIO(io.BytesIO):
@@ -371,6 +390,7 @@ class RouterHTTPContractTests(unittest.TestCase):
         self.assertIsInstance(payload["streaming_support"], dict)
         self.assertIsInstance(payload["default_models"], dict)
         self.assertIsInstance(payload["frontend_contract"], dict)
+        self.assertIsInstance(payload["mcp"], dict)
         self.assertIsInstance(payload["tools"], list)
         self.assertIsInstance(payload["not_yet_supported"], list)
 
@@ -389,6 +409,9 @@ class RouterHTTPContractTests(unittest.TestCase):
         self.assertEqual(payload["available_routes"]["reasoning"]["streaming"], False)
         self.assertIn("local", payload["streaming_support"]["routes"])
         self.assertNotIn("reasoning", payload["streaming_support"]["routes"])
+        self.assertEqual(payload["mcp"]["management_flow"], "separate_control_plane")
+        self.assertEqual(payload["mcp"]["catalog_sources"][0]["source_id"], "docker_mcp_catalog")
+        self.assertEqual(payload["mcp"]["servers"], [])
         self.assertEqual(
             payload["tools"],
             [
@@ -435,6 +458,86 @@ class RouterHTTPContractTests(unittest.TestCase):
                     "enabled_by_default": False,
                 },
             ],
+        )
+
+    def test_mcp_install_flow_requires_explicit_user_confirmation(self) -> None:
+        app, _ = self.make_app(build_config())
+        definition = McpServerDefinition(
+            source_id="docker_mcp_catalog",
+            server_id="demo.server",
+            slug="demo-server",
+            display_name="Demo Server",
+            description="Demo MCP server.",
+            details_url="https://example.test/demo-server",
+            tools_url="https://example.test/demo-server/tools.json",
+        )
+        app.mcp_manager._catalog_client = _FakeMcpCatalogClient(servers=[definition])
+
+        status_code, _, payload = perform_json_request(
+            app,
+            method="POST",
+            path="/v1/mcp/servers/install",
+            body={
+                "source_id": "docker_mcp_catalog",
+                "server_id": "demo.server",
+                "confirm": False,
+            },
+        )
+
+        self.assertEqual(status_code, 400)
+        self.assert_error_payload(payload, error_type="invalid_mcp_request")
+
+    def test_ready_mcp_tools_appear_in_normal_tools_capabilities_list(self) -> None:
+        app, _ = self.make_app(build_config())
+        definition = McpServerDefinition(
+            source_id="docker_mcp_catalog",
+            server_id="demo.server",
+            slug="demo-server",
+            display_name="Demo Server",
+            description="Demo MCP server.",
+            details_url="https://example.test/demo-server",
+            tools_url="https://example.test/demo-server/tools.json",
+        )
+        tool = McpDiscoveredTool(
+            tool_name="lookup",
+            description="Look up demo data.",
+            input_schema={
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+            risk_level=ToolRiskLevel.MEDIUM,
+            capabilities=["lookup"],
+        )
+        app.mcp_manager._catalog_client = _FakeMcpCatalogClient(
+            servers=[definition],
+            tools_by_server_id={"demo.server": [tool]},
+        )
+        app.mcp_manager.install_server(
+            source_id="docker_mcp_catalog",
+            server_id="demo.server",
+            confirm=True,
+        )
+        app.mcp_manager.enable_server("demo.server")
+
+        status_code, _, payload = perform_json_request(
+            app,
+            method="GET",
+            path="/v1/router/capabilities",
+        )
+
+        self.assertEqual(status_code, 200)
+        self.assertEqual(payload["mcp"]["servers"][0]["status"], "ready")
+        self.assertIn(
+            {
+                "name": "mcp.demo-server.lookup",
+                "description": "[MCP demo-server] Look up demo data.",
+                "risk_level": "medium",
+                "capabilities": ["mcp", "lookup"],
+                "enabled_by_default": False,
+            },
+            payload["tools"],
         )
 
     def test_models_contract_currently_routes_to_local_provider(self) -> None:

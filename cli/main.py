@@ -8,7 +8,7 @@ import sys
 import time
 from urllib import error, request
 
-from cli.tool_selector import select_tools
+from cli.mcp_manager import configure_session
 
 ROUTING_MODES = ("auto", "local", "reasoning", "heavy")
 THINK_BLOCK_RE = re.compile(r"^\s*<think>(.*?)</think>\s*(.*)\Z", re.DOTALL)
@@ -364,7 +364,7 @@ def _run_request(
 
 
 def run_interactive(args: argparse.Namespace) -> None:
-    selected_tools = select_tools(args.router_url)
+    selected_tools = configure_session(args.router_url)
 
     print(f"infra-ai CLI connected to {args.router_url}")
     print(f"route={args.route} model={args.model}")
@@ -404,7 +404,7 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     prompt = _read_prompt(args)
-    selected_tools = select_tools(args.router_url)
+    selected_tools = configure_session(args.router_url)
     _run_request(args=args, prompt=prompt, allowed_tools=selected_tools)
 
 

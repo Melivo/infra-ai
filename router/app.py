@@ -39,6 +39,7 @@ from router.providers.openai import (
 from router.providers.openai.models import OPENAI_MODELS_SLOT
 from router.schemas import JSONValue, RouterConfig, ROUTING_MODES, StreamingResponse
 from router.tool_loop import ToolLoopEngine, ToolLoopError
+from router.tools.mcp import GithubMcpCatalogClient, McpServerManager
 from router.tools.core_tools import register_core_tools
 from router.tools.example_tools import register_example_tools
 from router.tools.orchestrator import ToolOrchestrator
@@ -102,6 +103,10 @@ class RouterApplication:
         self.tool_registry = ToolRegistry()
         register_example_tools(self.tool_registry)
         register_core_tools(self.tool_registry)
+        self.mcp_manager = McpServerManager(
+            registry=self.tool_registry,
+            catalog_client=GithubMcpCatalogClient(),
+        )
         self.tool_policy = ToolPolicy()
         self.tool_orchestrator = ToolOrchestrator(
             registry=self.tool_registry,
@@ -180,6 +185,7 @@ class RouterApplication:
                     "openai_realtime": self.config.openai_realtime_model,
                 },
                 "openai": _build_openai_capabilities(self.config),
+                "mcp": self.mcp_manager.capabilities_payload(),
                 "tool_loop": {
                     "implemented": True,
                     "max_tool_steps": self.config.max_tool_steps,
@@ -206,7 +212,7 @@ class RouterApplication:
                     "openai_agent orchestration layer",
                     "parallel tool calls",
                     "gemini native tool-call translation",
-                    "agents and MCP integration",
+                    "broader MCP runtime transport integration",
                 ],
             },
         )
@@ -400,6 +406,115 @@ class RouterApplication:
             _log_provider_error(provider_name=provider_name, error=exc, streaming=False)
             return exc.status_code, normalize_provider_error(exc)
 
+    def mcp_catalog_servers(self) -> tuple[int, JSONValue]:
+        try:
+            return HTTPStatus.OK, {
+                "object": "mcp.catalog.servers",
+                "data": self.mcp_manager.catalog_servers_payload(),
+            }
+        except Exception as exc:
+            return HTTPStatus.BAD_GATEWAY, _error_payload("mcp_catalog_unavailable", str(exc))
+
+    def mcp_servers(self) -> tuple[int, JSONValue]:
+        return HTTPStatus.OK, {
+            "object": "mcp.server.list",
+            "data": self.mcp_manager.installations_payload(),
+        }
+
+    def mcp_suggest_servers(self, payload: dict[str, JSONValue]) -> tuple[int, JSONValue]:
+        query = payload.get("query")
+        if not isinstance(query, str) or not query.strip():
+            return HTTPStatus.BAD_REQUEST, _error_payload(
+                "invalid_mcp_request",
+                "The query field must be a non-blank string.",
+            )
+        try:
+            return HTTPStatus.OK, {
+                "object": "mcp.catalog.suggestions",
+                "data": self.mcp_manager.suggestions_payload(query),
+            }
+        except Exception as exc:
+            return HTTPStatus.BAD_GATEWAY, _error_payload("mcp_catalog_unavailable", str(exc))
+
+    def install_mcp_server(self, payload: dict[str, JSONValue]) -> tuple[int, JSONValue]:
+        source_id = payload.get("source_id")
+        server_id = payload.get("server_id")
+        confirm = payload.get("confirm")
+        if (
+            not isinstance(source_id, str)
+            or not source_id.strip()
+            or not isinstance(server_id, str)
+            or not server_id.strip()
+            or not isinstance(confirm, bool)
+        ):
+            return HTTPStatus.BAD_REQUEST, _error_payload(
+                "invalid_mcp_request",
+                "source_id, server_id, and confirm are required for MCP installation.",
+            )
+        try:
+            installation = self.mcp_manager.install_server(
+                source_id=source_id.strip(),
+                server_id=server_id.strip(),
+                confirm=confirm,
+            )
+            return HTTPStatus.OK, {
+                "object": "mcp.server.installation",
+                "server": self._mcp_installation_payload(installation),
+            }
+        except ValueError as exc:
+            return HTTPStatus.BAD_REQUEST, _error_payload("invalid_mcp_request", str(exc))
+        except Exception as exc:
+            return HTTPStatus.BAD_GATEWAY, _error_payload("mcp_catalog_unavailable", str(exc))
+
+    def enable_mcp_server(self, payload: dict[str, JSONValue]) -> tuple[int, JSONValue]:
+        server_id = payload.get("server_id")
+        if not isinstance(server_id, str) or not server_id.strip():
+            return HTTPStatus.BAD_REQUEST, _error_payload(
+                "invalid_mcp_request",
+                "The server_id field must be a non-blank string.",
+            )
+        try:
+            installation = self.mcp_manager.enable_server(server_id.strip())
+            return HTTPStatus.OK, {
+                "object": "mcp.server.installation",
+                "server": self._mcp_installation_payload(installation),
+            }
+        except KeyError:
+            return HTTPStatus.NOT_FOUND, _error_payload("mcp_server_not_found", f"unknown MCP server: {server_id}")
+        except Exception as exc:
+            return HTTPStatus.BAD_GATEWAY, _error_payload("mcp_catalog_unavailable", str(exc))
+
+    def disable_mcp_server(self, payload: dict[str, JSONValue]) -> tuple[int, JSONValue]:
+        server_id = payload.get("server_id")
+        if not isinstance(server_id, str) or not server_id.strip():
+            return HTTPStatus.BAD_REQUEST, _error_payload(
+                "invalid_mcp_request",
+                "The server_id field must be a non-blank string.",
+            )
+        try:
+            installation = self.mcp_manager.disable_server(server_id.strip())
+            return HTTPStatus.OK, {
+                "object": "mcp.server.installation",
+                "server": self._mcp_installation_payload(installation),
+            }
+        except KeyError:
+            return HTTPStatus.NOT_FOUND, _error_payload("mcp_server_not_found", f"unknown MCP server: {server_id}")
+        except Exception as exc:
+            return HTTPStatus.BAD_GATEWAY, _error_payload("mcp_catalog_unavailable", str(exc))
+
+    def _mcp_installation_payload(self, installation) -> dict[str, JSONValue]:
+        return {
+            "source_id": installation.definition.source_id,
+            "server_id": installation.definition.server_id,
+            "slug": installation.definition.slug,
+            "display_name": installation.definition.display_name,
+            "description": installation.definition.description,
+            "status": installation.status.value,
+            "enabled": installation.enabled,
+            "ready_tool_names": list(installation.published_tool_names),
+            "last_error": installation.last_error,
+        }
+
 
 class RouterHTTPServer(ThreadingHTTPServer):
     def __init__(self, server_address, handler_class, app: RouterApplication) -> None:
@@ -424,21 +539,45 @@ class RouterRequestHandler(BaseHTTPRequestHandler):
             self._write_response(*self.server.app.capabilities())
             return
 
+        if self.path == "/v1/mcp/catalog/servers":
+            self._write_response(*self.server.app.mcp_catalog_servers())
+            return
+
+        if self.path == "/v1/mcp/servers":
+            self._write_response(*self.server.app.mcp_servers())
+            return
+
         self._write_response(
             HTTPStatus.NOT_FOUND,
             _error_payload("unsupported_path", f"unsupported path: {self.path}"),
         )
 
     def do_POST(self) -> None:
+        payload = self._read_json_body()
+        if payload is None:
+            return
+
+        if self.path == "/v1/mcp/catalog/suggest":
+            self._write_response(*self.server.app.mcp_suggest_servers(payload))
+            return
+
+        if self.path == "/v1/mcp/servers/install":
+            self._write_response(*self.server.app.install_mcp_server(payload))
+            return
+
+        if self.path == "/v1/mcp/servers/enable":
+            self._write_response(*self.server.app.enable_mcp_server(payload))
+            return
+
+        if self.path == "/v1/mcp/servers/disable":
+            self._write_response(*self.server.app.disable_mcp_server(payload))
+            return
+
         if self.path != "/v1/chat/completions":
             self._write_response(
                 HTTPStatus.NOT_FOUND,
                 _error_payload("unsupported_path", f"unsupported path: {self.path}"),
             )
-            return
-
-        payload = self._read_json_body()
-        if payload is None:
             return
 
         try:

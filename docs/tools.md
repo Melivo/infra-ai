@@ -27,6 +27,24 @@ Chat Request
 
 Der bisherige explizite Debug-Pfad ueber `tool_call` in `POST /v1/chat/completions` bleibt weiterhin erhalten und nutzt dieselbe Tool-Ausfuehrungsschicht.
 
+Fuer den ersten MCP-Slice kommt zusaetzlich ein separater Management-/Control-Plane-Pfad dazu:
+
+```text
+Terminal UI / MCP Servers
+-> Router MCP Management
+  -> Catalog Source
+  -> Server Inventory
+  -> Install / Enable / Disable
+  -> Tool Discovery
+  -> Spiegelung ready MCP-Tools in ToolRegistry
+```
+
+Wichtig:
+
+- MCP-Server-Management ist kein normaler Tool-Call.
+- Install/Enable/Disable laeuft nicht im normalen `ToolLoopEngine`.
+- Erst nach erfolgreicher Discovery und Ready-State erscheinen MCP-Tools als normale Tools in der `ToolRegistry`.
+
 ## Interne Bausteine
 
 - `ConversationTurn`, spezialisierte Turn-Typen sowie explizite `ExecutionStep`-/`ExecutionPlan`-State-Modelle in `router/conversation.py`
@@ -55,7 +73,6 @@ V1 unterstuetzt bewusst noch nicht:
 
 - parallele Tool-Calls
 - persistente Agent-Memory
-- MCP
 - RAG
 - Workflow- oder Background-Engines
 
@@ -131,3 +148,21 @@ Diese Tools bleiben bewusst konservativ:
 ## Ausblick
 
 Die aktuelle Normalisierungsschicht ist bewusst klein gehalten, damit spaetere Erweiterungen wie MCP-, RAG- oder Agent-Layer auf derselben Router-internen Struktur aufsetzen koennen, ohne Frontend- oder Provider-Logik zu vermischen.
+
+## MCP-Slice
+
+Der erste MCP-Slice fuehrt eine kleine explizite Trennung ein:
+
+- `MCP Servers` als Management-/Control-Plane fuer Catalog-Discovery, Inventory, Install, Enable, Disable und Status
+- normale Tool-Plane fuer entdeckte MCP-Tools, sobald ein Server ready ist
+
+MCP bleibt damit ein Adapter auf die bestehende Tool-Schicht:
+
+- MCP-Tools werden als normale `ToolSpec`-/`ToolExecutor`-Eintraege im `ToolRegistry` gespiegelt
+- `ToolPolicy`, `ToolOrchestrator` und `ToolLoopEngine` bleiben fuer MCP-Tools dieselben wie fuer native Tools
+- es gibt keine zweite MCP-spezifische Plan- oder Execution-Welt
+
+Der sichtbare UI-Split ist deshalb bewusst:
+
+- `Tools`
+- `MCP Servers`

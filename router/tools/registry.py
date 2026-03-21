@@ -45,6 +45,12 @@ class ToolRegistry:
         """Return whether a tool name is present in the registry."""
         return name in self._entries
 
+    def unregister(self, name: str) -> None:
+        """Remove a registered tool definition and executor."""
+        if name not in self._entries:
+            raise ToolNotFoundError(f"tool not found: {name}")
+        del self._entries[name]
+
     def list_specs(self) -> list[ToolSpec]:
         """Return all registered tool specifications sorted by tool name."""
         return [entry[0] for _, entry in sorted(self._entries.items())]

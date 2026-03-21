@@ -8,6 +8,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from cli import mcp_manager as cli_mcp_manager
 from cli import tool_selector
 from cli.main import (
     build_payload,
@@ -105,7 +106,7 @@ class CLIEntrypointTests(unittest.TestCase):
         args = parse_args([])
 
         with (
-            patch("cli.main.select_tools", return_value=[]),
+            patch("cli.main.configure_session", return_value=[]),
             patch("cli.main._run_request") as run_request,
             patch("builtins.input", side_effect=["Hallo", "/exit"]),
         ):
@@ -230,6 +231,39 @@ class ToolSelectorTests(unittest.TestCase):
         choices = captured["choices"]
         self.assertEqual(len(choices), 1)
         self.assertFalse(choices[0]["checked"])
+
+
+class McpSessionSetupTests(unittest.TestCase):
+    def test_session_setup_shows_separate_mcp_servers_option(self) -> None:
+        captured: dict[str, object] = {}
+
+        class _FakeTTY(io.StringIO):
+            def isatty(self) -> bool:
+                return True
+
+        class _Prompt:
+            def ask(self) -> str:
+                return "start_chat"
+
+        def _fake_select(message, *, choices, **kwargs):
+            captured["message"] = message
+            captured["choices"] = choices
+            captured["kwargs"] = kwargs
+            return _Prompt()
+
+        with (
+            patch.object(cli_mcp_manager, "questionary", SimpleNamespace(select=_fake_select)),
+            patch.object(cli_mcp_manager, "Choice", side_effect=lambda **kwargs: kwargs),
+            patch.object(cli_mcp_manager, "select_tools", return_value=[]),
+            patch.object(cli_mcp_manager, "_manage_mcp_servers"),
+            patch.object(cli_mcp_manager.sys, "stdin", _FakeTTY()),
+            patch.object(cli_mcp_manager.sys, "stdout", _FakeTTY()),
+        ):
+            selected = cli_mcp_manager.configure_session("http://127.0.0.1:8010/v1")
+
+        self.assertEqual(selected, [])
+        choices = captured["choices"]
+        self.assertEqual([choice["value"] for choice in choices], ["tools", "mcp_servers", "start_chat"])
 
 
 if __name__ == "__main__":

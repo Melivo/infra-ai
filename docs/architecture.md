@@ -49,6 +49,8 @@ The router controls:
 - timeout policy
 - streaming behavior at the platform boundary
 - public capabilities and model discovery endpoints
+- MCP catalog/server management at the control-plane boundary
+- mirroring ready MCP-backed tools into the normal tool layer
 
 The router is frontend-agnostic.
 
@@ -92,7 +94,9 @@ Providers do not define the public platform contract on their own. The router do
 ## Not Yet Implemented
 
 - agents
-- MCP integration
+- broader MCP runtime transport expansion
+- MCP OAuth / secret management
+- MCP background or daemon orchestration
 - RAG or project context
 - workflow automation
 - parallel tool calls
