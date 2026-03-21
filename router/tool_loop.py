@@ -4,6 +4,7 @@ import os
 from dataclasses import dataclass, replace
 from http import HTTPStatus
 import json
+from typing import Callable
 
 from router.conversation import (
     can_execution_plan_make_progress,
@@ -23,7 +24,7 @@ from router.schemas import JSONValue
 from router.tools.orchestrator import ToolExecutionTimeoutError, ToolOrchestrator
 from router.tools.policy import ToolExecutionDeniedError
 from router.tools.registry import ToolNotFoundError
-from router.tools.types import ToolCall, ToolContext, ToolResult
+from router.tools.types import McpToolBinding, McpToolServerState, ToolCall, ToolContext, ToolResult
 from router.tools.validation import ToolArgumentsValidationError
 
 
@@ -56,11 +57,13 @@ class ToolLoopEngine:
         max_tool_steps: int,
         tool_timeout_s: float,
         workspace_root: str | None = None,
+        mcp_server_state_lookup: Callable[[McpToolBinding], McpToolServerState | None] | None = None,
     ) -> None:
         self._tool_orchestrator = tool_orchestrator
         self._max_tool_steps = max_tool_steps
         self._tool_timeout_s = tool_timeout_s
         self._workspace_root = workspace_root or os.getcwd()
+        self._mcp_server_state_lookup = mcp_server_state_lookup
 
     async def run(
         self,
@@ -223,6 +226,7 @@ class ToolLoopEngine:
                         if allowed_tools is not None
                         else None
                     ),
+                    mcp_server_state_lookup=self._mcp_server_state_lookup,
                 ),
             )
         except ToolNotFoundError as exc:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from router.tools.policy import ToolExecutionDeniedError, ToolPolicy, ToolPolicyConfig
-from router.tools.types import ToolCall, ToolContext, ToolResult, ToolRiskLevel, ToolSpec
+from router.tools.types import McpToolBinding, McpToolServerState, ToolContext, ToolRiskLevel, ToolSpec
 
 
 def _make_spec(name: str = "tool.a", workspace_required: bool = False) -> ToolSpec:
@@ -18,8 +18,15 @@ def _make_spec(name: str = "tool.a", workspace_required: bool = False) -> ToolSp
     )
 
 
-def _make_ctx(workspace_root: str | None = None) -> ToolContext:
-    return ToolContext(request_id="req-test", workspace_root=workspace_root)
+def _make_ctx(
+    workspace_root: str | None = None,
+    mcp_server_state_lookup=None,
+) -> ToolContext:
+    return ToolContext(
+        request_id="req-test",
+        workspace_root=workspace_root,
+        mcp_server_state_lookup=mcp_server_state_lookup,
+    )
 
 
 class ToolPolicyWorkspaceRequiredTests(unittest.TestCase):
@@ -72,6 +79,73 @@ class ToolPolicyWorkspaceRequiredTests(unittest.TestCase):
         spec = _make_spec(workspace_required=False)
         ctx = _make_ctx(workspace_root=None)
         self.policy.check(spec, ctx)  # must not raise
+
+
+class ToolPolicyMcpReadinessTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.policy = ToolPolicy()
+
+    def _mcp_spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="mcp.demo.lookup",
+            description="demo mcp tool",
+            input_schema={"type": "object", "additionalProperties": False},
+            risk_level=ToolRiskLevel.MEDIUM,
+            capabilities=["mcp"],
+            enabled_by_default=False,
+            mcp_binding=McpToolBinding(
+                server_id="demo.server",
+                server_slug="demo-server",
+                discovered_tool_name="lookup",
+            ),
+        )
+
+    def test_denies_mcp_tool_when_server_not_ready(self) -> None:
+        spec = self._mcp_spec()
+        ctx = ToolContext(
+            request_id="req-test",
+            allowed_tool_names=frozenset({"mcp.demo.lookup"}),
+            mcp_server_state_lookup=lambda binding: McpToolServerState(
+                server_id=binding.server_id,
+                installed=True,
+                enabled=True,
+                ready=False,
+            ),
+        )
+
+        with self.assertRaises(ToolExecutionDeniedError):
+            self.policy.check(spec, ctx)
+
+    def test_denies_mcp_tool_when_server_disabled(self) -> None:
+        spec = self._mcp_spec()
+        ctx = ToolContext(
+            request_id="req-test",
+            allowed_tool_names=frozenset({"mcp.demo.lookup"}),
+            mcp_server_state_lookup=lambda binding: McpToolServerState(
+                server_id=binding.server_id,
+                installed=True,
+                enabled=False,
+                ready=False,
+            ),
+        )
+
+        with self.assertRaises(ToolExecutionDeniedError):
+            self.policy.check(spec, ctx)
+
+    def test_allows_mcp_tool_when_server_ready(self) -> None:
+        spec = self._mcp_spec()
+        ctx = ToolContext(
+            request_id="req-test",
+            allowed_tool_names=frozenset({"mcp.demo.lookup"}),
+            mcp_server_state_lookup=lambda binding: McpToolServerState(
+                server_id=binding.server_id,
+                installed=True,
+                enabled=True,
+                ready=True,
+            ),
+        )
+
+        self.policy.check(spec, ctx)
 
 
 if __name__ == "__main__":

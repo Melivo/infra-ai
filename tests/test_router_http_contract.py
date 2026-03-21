@@ -19,7 +19,11 @@ from router.app import RouterApplication, RouterRequestHandler
 from router.provider_output import ProviderOutput
 from router.providers.base import Provider, ProviderError
 from router.schemas import JSONValue, RouterConfig
-from router.tools.mcp import McpDiscoveredTool, McpServerDefinition
+from router.tools.mcp import (
+    McpCatalogInvalidResponseError,
+    McpDiscoveredTool,
+    McpServerDefinition,
+)
 from router.tools.types import ToolCall, ToolContext, ToolResult, ToolRiskLevel, ToolSpec
 
 
@@ -486,6 +490,29 @@ class RouterHTTPContractTests(unittest.TestCase):
 
         self.assertEqual(status_code, 400)
         self.assert_error_payload(payload, error_type="invalid_mcp_request")
+
+    def test_mcp_catalog_invalid_response_is_normalized_at_http_boundary(self) -> None:
+        app, _ = self.make_app(build_config())
+
+        class _BrokenCatalogClient:
+            def list_servers(self, source):
+                del source
+                raise McpCatalogInvalidResponseError("invalid catalog server list response")
+
+            def discover_tools(self, definition):
+                del definition
+                return []
+
+        app.mcp_manager._catalog_client = _BrokenCatalogClient()
+
+        status_code, _, payload = perform_json_request(
+            app,
+            method="GET",
+            path="/v1/mcp/catalog/servers",
+        )
+
+        self.assertEqual(status_code, 502)
+        self.assert_error_payload(payload, error_type="mcp_catalog_invalid_response")
 
     def test_ready_mcp_tools_appear_in_normal_tools_capabilities_list(self) -> None:
         app, _ = self.make_app(build_config())

@@ -4,6 +4,8 @@ import asyncio
 import unittest
 
 from router.tools.mcp import (
+    GithubMcpCatalogClient,
+    McpCatalogError,
     McpCatalogSource,
     McpDiscoveredTool,
     McpServerDefinition,
@@ -14,6 +16,21 @@ from router.tools.orchestrator import ToolOrchestrator
 from router.tools.policy import ToolPolicy
 from router.tools.registry import ToolRegistry
 from router.tools.types import ToolCall, ToolContext, ToolResult, ToolRiskLevel
+
+
+class _CountingRegistry(ToolRegistry):
+    def __init__(self) -> None:
+        super().__init__()
+        self.register_calls: list[str] = []
+        self.unregister_calls: list[str] = []
+
+    def register(self, spec, executor) -> None:
+        self.register_calls.append(spec.name)
+        super().register(spec, executor)
+
+    def unregister(self, name: str) -> None:
+        self.unregister_calls.append(name)
+        super().unregister(name)
 
 
 class _FakeCatalogClient:
@@ -134,6 +151,30 @@ class McpServerManagerTests(unittest.TestCase):
         self.assertEqual(installation.status, McpServerStatus.READY)
         self.assertTrue(registry.has("mcp.demo-server.lookup"))
 
+    def test_enable_server_publishes_tools_once_with_final_state(self) -> None:
+        definition = self._make_definition()
+        tool = self._make_tool()
+        registry = _CountingRegistry()
+        manager = McpServerManager(
+            registry=registry,
+            catalog_client=_FakeCatalogClient(
+                servers=[definition],
+                tools_by_server_id={"demo.server": [tool]},
+            ),
+            runtime=_FakeRuntime(),
+        )
+        manager.install_server(
+            source_id="docker_mcp_catalog",
+            server_id="demo.server",
+            confirm=True,
+        )
+
+        installation = manager.enable_server("demo.server")
+
+        self.assertEqual(installation.published_tool_names, ("mcp.demo-server.lookup",))
+        self.assertEqual(registry.register_calls, ["mcp.demo-server.lookup"])
+        self.assertEqual(registry.unregister_calls, [])
+
     def test_disabled_or_unready_server_does_not_publish_tools_to_registry(self) -> None:
         definition = self._make_definition()
         manager = McpServerManager(
@@ -210,12 +251,49 @@ class McpServerManagerTests(unittest.TestCase):
                 ToolContext(
                     request_id="req-1",
                     allowed_tool_names=frozenset({"mcp.demo-server.lookup"}),
+                    mcp_server_state_lookup=manager.server_state_for_binding,
                 ),
             )
         )
 
         self.assertEqual(result.ok, True)
         self.assertEqual(result.output_json["tool_name"], "lookup")
+
+
+class GithubMcpCatalogClientTests(unittest.TestCase):
+    def test_catalog_client_normalizes_invalid_server_list_response(self) -> None:
+        client = GithubMcpCatalogClient(fetch_json=lambda _: {"servers": "invalid"})
+
+        with self.assertRaises(McpCatalogError) as exc_info:
+            client.list_servers(
+                McpCatalogSource(
+                    source_id="docker_mcp_catalog",
+                    display_name="Docker MCP Catalog",
+                    repository_url="https://github.com/docker/mcp-registry",
+                    catalog_api_url="https://example.test/catalog",
+                    tools_url_template="https://example.test/{slug}/tools.json",
+                )
+            )
+
+        self.assertIn("invalid catalog server list", str(exc_info.exception).lower())
+
+    def test_catalog_client_normalizes_invalid_tools_response(self) -> None:
+        client = GithubMcpCatalogClient(fetch_json=lambda _: {"tools": "invalid"})
+
+        with self.assertRaises(McpCatalogError) as exc_info:
+            client.discover_tools(
+                McpServerDefinition(
+                    source_id="docker_mcp_catalog",
+                    server_id="demo.server",
+                    slug="demo-server",
+                    display_name="Demo Server",
+                    description="Demo MCP server.",
+                    details_url="https://example.test/demo-server",
+                    tools_url="https://example.test/demo-server/tools.json",
+                )
+            )
+
+        self.assertIn("invalid mcp tools response", str(exc_info.exception).lower())
 
 
 if __name__ == "__main__":

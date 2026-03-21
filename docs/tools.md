@@ -160,6 +160,7 @@ MCP bleibt damit ein Adapter auf die bestehende Tool-Schicht:
 
 - MCP-Tools werden als normale `ToolSpec`-/`ToolExecutor`-Eintraege im `ToolRegistry` gespiegelt
 - `ToolPolicy`, `ToolOrchestrator` und `ToolLoopEngine` bleiben fuer MCP-Tools dieselben wie fuer native Tools
+- die Ausfuehrbarkeit eines MCP-Tools wird zentral ueber `ToolPolicy` anhand expliziter MCP-Tool-Metadaten und Server-Readiness entschieden, nicht implizit im Runtime-Adapter
 - es gibt keine zweite MCP-spezifische Plan- oder Execution-Welt
 
 Der sichtbare UI-Split ist deshalb bewusst:

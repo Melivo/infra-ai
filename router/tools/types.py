@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 
 class ToolRiskLevel(Enum):
@@ -11,6 +11,27 @@ class ToolRiskLevel(Enum):
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
+
+
+@dataclass(frozen=True)
+class McpToolBinding:
+    """Explicit MCP ownership metadata for MCP-backed tools."""
+
+    server_id: str
+    server_slug: str
+    discovered_tool_name: str
+
+
+@dataclass(frozen=True)
+class McpToolServerState:
+    """Minimal MCP server execution state visible to the tool policy."""
+
+    server_id: str
+    installed: bool
+    enabled: bool
+    ready: bool
+    auth_ready: bool = True
+    last_error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -24,6 +45,7 @@ class ToolSpec:
     capabilities: list[str]
     enabled_by_default: bool = False
     workspace_required: bool = False
+    mcp_binding: McpToolBinding | None = None
 
 
 @dataclass(frozen=True)
@@ -59,6 +81,7 @@ class ToolContext:
     current_tool_step: int = 0
     tool_timeout_s: float = 30.0
     allowed_tool_names: frozenset[str] | None = None
+    mcp_server_state_lookup: Callable[[McpToolBinding], McpToolServerState | None] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 

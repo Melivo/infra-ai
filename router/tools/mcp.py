@@ -9,6 +9,8 @@ from urllib import request
 
 from router.tools.registry import ToolRegistry
 from router.tools.types import (
+    McpToolBinding,
+    McpToolServerState,
     ToolCall,
     ToolContext,
     ToolResult,
@@ -84,15 +86,29 @@ class McpRuntime(Protocol):
         ...
 
 
+class McpCatalogError(RuntimeError):
+    error_type = "mcp_catalog_unavailable"
+
+
+class McpCatalogUnavailableError(McpCatalogError):
+    error_type = "mcp_catalog_unavailable"
+
+
+class McpCatalogInvalidResponseError(McpCatalogError):
+    error_type = "mcp_catalog_invalid_response"
+
+
 class GithubMcpCatalogClient:
     def __init__(self, fetch_json=None) -> None:
         self._fetch_json = fetch_json or _fetch_json
 
     def list_servers(self, source: McpCatalogSource) -> list[McpServerDefinition]:
-        payload = self._fetch_json(source.catalog_api_url)
+        payload = self._load_json(source.catalog_api_url)
         entries = payload.get("servers") if isinstance(payload, dict) else payload
         if not isinstance(entries, list):
-            return []
+            raise McpCatalogInvalidResponseError(
+                f"Invalid catalog server list response from {source.catalog_api_url}."
+            )
 
         servers: list[McpServerDefinition] = []
         for entry in entries:
@@ -107,10 +123,12 @@ class GithubMcpCatalogClient:
         if definition.tools_url is None:
             return []
 
-        payload = self._fetch_json(definition.tools_url)
+        payload = self._load_json(definition.tools_url)
         entries = payload.get("tools") if isinstance(payload, dict) else payload
         if not isinstance(entries, list):
-            return []
+            raise McpCatalogInvalidResponseError(
+                f"Invalid MCP tools response from {definition.tools_url}."
+            )
 
         tools: list[McpDiscoveredTool] = []
         for entry in entries:
@@ -120,6 +138,16 @@ class GithubMcpCatalogClient:
             if parsed is not None:
                 tools.append(parsed)
         return sorted(tools, key=lambda item: item.tool_name)
+
+    def _load_json(self, url: str) -> Any:
+        try:
+            return self._fetch_json(url)
+        except McpCatalogError:
+            raise
+        except Exception as exc:
+            raise McpCatalogUnavailableError(
+                f"Unable to load MCP catalog data from {url}."
+            ) from exc
 
 
 class UnavailableMcpRuntime:
@@ -255,26 +283,20 @@ class McpServerManager:
             self._unpublish(server_id)
             return failed
 
-        published_tool_names = tuple(
-            self._publish(installation=installation, discovered_tools=discovered_tools)
-        )
         ready = replace(
             installation,
             status=McpServerStatus.READY,
             enabled=True,
             discovered_tools=discovered_tools,
-            published_tool_names=published_tool_names,
+            published_tool_names=tuple(
+                _registry_tool_name(installation.definition.slug, tool.tool_name)
+                for tool in discovered_tools
+            ),
             last_error=None,
         )
-        self._installations[server_id] = ready
-
-        # Re-register with the final ready-state installation object captured by the executor.
         self._unpublish(server_id)
-        published_tool_names = tuple(
-            self._publish(installation=ready, discovered_tools=discovered_tools)
-        )
-        ready = replace(ready, published_tool_names=published_tool_names)
         self._installations[server_id] = ready
+        self._publish(installation=ready, discovered_tools=discovered_tools)
         return ready
 
     def disable_server(self, server_id: str) -> McpServerInstallation:
@@ -341,6 +363,22 @@ class McpServerManager:
             for definition in self.suggest_servers(query)
         ]
 
+    def server_state_for_binding(
+        self,
+        binding: McpToolBinding,
+    ) -> McpToolServerState | None:
+        installation = self._installations.get(binding.server_id)
+        if installation is None:
+            return None
+        return McpToolServerState(
+            server_id=installation.definition.server_id,
+            installed=True,
+            enabled=installation.enabled,
+            ready=installation.status == McpServerStatus.READY,
+            auth_ready=installation.status == McpServerStatus.READY,
+            last_error=installation.last_error,
+        )
+
     def _resolve_server_definition(self, *, source_id: str, server_id: str) -> McpServerDefinition:
         for definition in self.list_catalog_servers(source_id):
             if definition.server_id == server_id:
@@ -352,9 +390,7 @@ class McpServerManager:
         *,
         installation: McpServerInstallation,
         discovered_tools: tuple[McpDiscoveredTool, ...],
-    ) -> list[str]:
-        self._unpublish(installation.definition.server_id)
-        published_tool_names: list[str] = []
+    ) -> None:
         for tool in discovered_tools:
             tool_name = _registry_tool_name(installation.definition.slug, tool.tool_name)
             spec = ToolSpec(
@@ -365,6 +401,11 @@ class McpServerManager:
                 capabilities=_merge_capabilities(tool.capabilities),
                 enabled_by_default=False,
                 workspace_required=tool.workspace_required,
+                mcp_binding=McpToolBinding(
+                    server_id=installation.definition.server_id,
+                    server_slug=installation.definition.slug,
+                    discovered_tool_name=tool.tool_name,
+                ),
             )
             self.registry.register(
                 spec,
@@ -374,8 +415,6 @@ class McpServerManager:
                     runtime=self._runtime,
                 ),
             )
-            published_tool_names.append(tool_name)
-        return published_tool_names
 
     def _unpublish(self, server_id: str) -> None:
         installation = self._installations.get(server_id)

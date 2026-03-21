@@ -39,7 +39,11 @@ from router.providers.openai import (
 from router.providers.openai.models import OPENAI_MODELS_SLOT
 from router.schemas import JSONValue, RouterConfig, ROUTING_MODES, StreamingResponse
 from router.tool_loop import ToolLoopEngine, ToolLoopError
-from router.tools.mcp import GithubMcpCatalogClient, McpServerManager
+from router.tools.mcp import (
+    GithubMcpCatalogClient,
+    McpCatalogError,
+    McpServerManager,
+)
 from router.tools.core_tools import register_core_tools
 from router.tools.example_tools import register_example_tools
 from router.tools.orchestrator import ToolOrchestrator
@@ -117,6 +121,7 @@ class RouterApplication:
             max_tool_steps=config.max_tool_steps,
             tool_timeout_s=config.tool_timeout_s,
             workspace_root=self._workspace_root,
+            mcp_server_state_lookup=self.mcp_manager.server_state_for_binding,
         )
 
     def healthcheck(self) -> tuple[int, JSONValue]:
@@ -383,6 +388,7 @@ class RouterApplication:
                 if allowed_tool_names is not None
                 else None
             ),
+            mcp_server_state_lookup=self.mcp_manager.server_state_for_binding,
         )
         for spec in self.tool_registry.list_specs():
             if allowed_tool_names is not None and spec.name not in allowed_tool_names:
@@ -412,6 +418,8 @@ class RouterApplication:
                 "object": "mcp.catalog.servers",
                 "data": self.mcp_manager.catalog_servers_payload(),
             }
+        except McpCatalogError as exc:
+            return HTTPStatus.BAD_GATEWAY, _error_payload(exc.error_type, str(exc))
         except Exception as exc:
             return HTTPStatus.BAD_GATEWAY, _error_payload("mcp_catalog_unavailable", str(exc))
 
@@ -433,6 +441,8 @@ class RouterApplication:
                 "object": "mcp.catalog.suggestions",
                 "data": self.mcp_manager.suggestions_payload(query),
             }
+        except McpCatalogError as exc:
+            return HTTPStatus.BAD_GATEWAY, _error_payload(exc.error_type, str(exc))
         except Exception as exc:
             return HTTPStatus.BAD_GATEWAY, _error_payload("mcp_catalog_unavailable", str(exc))
 
@@ -463,6 +473,8 @@ class RouterApplication:
             }
         except ValueError as exc:
             return HTTPStatus.BAD_REQUEST, _error_payload("invalid_mcp_request", str(exc))
+        except McpCatalogError as exc:
+            return HTTPStatus.BAD_GATEWAY, _error_payload(exc.error_type, str(exc))
         except Exception as exc:
             return HTTPStatus.BAD_GATEWAY, _error_payload("mcp_catalog_unavailable", str(exc))
 
@@ -481,6 +493,8 @@ class RouterApplication:
             }
         except KeyError:
             return HTTPStatus.NOT_FOUND, _error_payload("mcp_server_not_found", f"unknown MCP server: {server_id}")
+        except McpCatalogError as exc:
+            return HTTPStatus.BAD_GATEWAY, _error_payload(exc.error_type, str(exc))
         except Exception as exc:
             return HTTPStatus.BAD_GATEWAY, _error_payload("mcp_catalog_unavailable", str(exc))
 
